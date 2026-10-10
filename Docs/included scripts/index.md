@@ -4,6 +4,6 @@ layout: default
 nav_order: 2
 ---
 
-# Included Scripts Testawd awd
+# Included Scripts
 
 All script file names are prefaced with `jg_EXPO_`, which is omitted here for better readability.
