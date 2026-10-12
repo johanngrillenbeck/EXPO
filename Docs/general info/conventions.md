@@ -33,8 +33,8 @@ Decide on a short project prefix, which is an arbitrary string delimited from th
 | Assembly project            | `[projectPrefix]_Assembly.rpp`                                                    | TF_Assembly.rpp                              | 02_Assembly   |
 | Cue project                 | `[projectPrefix]_[cueId]_[version].rpp`                                           | TF_1m01_v12.rpp                              | 03_Cues       |
 | Multicue project            | `[projectPrefix]_[cueId]_[version]_[cueId]_[version]_[cueId]_[version]_[...].rpp` | TF_1m02_v3_1m03_v2_1m06_v4.wav               | 03_Cues       |
-| Video preview               | `[projectPrefix]_[cueId]_[version]_preview.mp3`                                   | TF_1m01_v12_preview.mp3                      | 04_Previews   |
-| Audio preview               | `[projectPrefix]_[cueId]_[version]_preview.mp4`                                   | TF_1m01_v12_preview.mp4                      | 04_Previews   |
+| Video preview               | `[projectPrefix]_[cueId]_[version]_preview.mp4`                                   | TF_1m01_v12_preview.mp4                      | 04_Previews   |
+| Audio preview               | `[projectPrefix]_[cueId]_[version]_preview.mp3`                                   | TF_1m01_v12_preview.mp3                      | 04_Previews   |
 | Pre-mix STEM                | `[projectPrefix]_[cueId]_[version]_[STEM]_pre-mix_TC-[HH.MM.SS.FF].wav`           | TF_1m01_v12_HiStr_pre-mix_TC-01.01.12.19.wav | 03-01_Exports |
 | Mixed STEM                  | `[projectPrefix]_[cueId]_[version]_[STEM]_mixed_TC-[HH.MM.SS.FF].wav`             | TF_1m01_v12_HiStr_mixed_TC-01.01.12.19.wav   | 05_Delivery   |
 | Full mix created from STEMs | `[projectPrefix]_[cueId]_[version]_full-mix_TC-[HH.MM.SS.FF].wav`                 | TF_1m01_v12_full-mix_TC-01.01.12.19.wav      | 05_Delivery   |
