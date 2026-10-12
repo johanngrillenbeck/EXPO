@@ -1,5 +1,9 @@
 # jg_EXPO - Export and Delivery Management Script Collection for Film Scoring
 
+EXPO is a workflow standard with some simple script logic sprinkled on top to make exporting various files for film music projects as effortless as possible.
+
+The scripts are written in lua and can be imported to Reaper via ReaPack.
+
 ## Usage Documentation
 This script collection's very detailed documentation can be found under /Docs.
 You can read the plain markdown files, but an online version with the beautiful just-the-docs theme will be hosted [here]() in the future.
