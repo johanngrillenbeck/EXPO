@@ -1,8 +1,8 @@
 ---
 title: Render final STEMS and Full Mix
 layout: default
-nav_order: 8
-parent: Included Scripts
+nav_order: 3
+parent: Assembly Scripts
 ---
 
 # Render final STEMS and Full Mix

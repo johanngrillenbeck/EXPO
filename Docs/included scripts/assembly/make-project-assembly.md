@@ -1,8 +1,8 @@
 ---
 title: Make project ASSEMBLY
 layout: default
-nav_order: 1
-parent: Included Scripts
+nav-order: 1
+parent: Assembly Scripts
 ---
 
 # Make project ASSEMBLY

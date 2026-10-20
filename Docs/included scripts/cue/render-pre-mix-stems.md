@@ -1,8 +1,8 @@
 ---
 title: Render pre-mix STEMS
 layout: default
-nav_order: 5
-parent: Included Scripts
+nav_order: 3
+parent: Cue Scripts
 ---
 
 # Render pre-mix STEMS

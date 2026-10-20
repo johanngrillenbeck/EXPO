@@ -1,8 +1,8 @@
 ---
 title: Place cues
 layout: default
-nav_order: 6
-parent: Included Scripts
+nav_order: 2
+parent: Assembly Scripts
 ---
 
 # Place cues

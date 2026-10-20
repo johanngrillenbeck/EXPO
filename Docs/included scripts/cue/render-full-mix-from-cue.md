@@ -1,11 +1,11 @@
 ---
-title: Render preview audio
+title: Render Full Mix from Cue
 layout: default
 nav_order: 4
-parent: Included Scripts
+parent: Cue Scripts
 ---
 
-# Render preview audio
+# Render pre-mix STEMS
 
 | Info and Status         |     |
 | ----------------------- | --- |
@@ -17,5 +17,4 @@ parent: Included Scripts
 **Script Logic:**
 1. For safety: Checks if "Export" Region's Start and End point are on a whole frame number, moves if necessary.
 2. Sets "Export" Region Name to "Export $starttc - $endtc" (e.g. "Export 01:02:32:03 - 01:05:01:22")
-3. Looks at the channel configuration of master track and adds appropriate fold down chain
-4. Renders master track as mp3 to 04_Previews
+3. Renders the Master Mix to `05_Delivery`.

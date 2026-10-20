@@ -2,7 +2,7 @@
 title: Cue Monitor
 layout: default
 nav_order: 3
-parent: Included Scripts
+parent: Global Scripts
 ---
 
 # Cue Monitor

@@ -1,8 +1,8 @@
 ---
 title: Make project CUE
 layout: default
-nav_order: 2
-parent: Included Scripts
+nav_order: 1
+parent: Cue Scripts
 ---
 
 # Make project CUE

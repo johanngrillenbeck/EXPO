@@ -2,14 +2,14 @@
 title: Render preview video
 layout: default
 nav_order: 7
-parent: Included Scripts
+parent: Global Scripts
 ---
 
 # Render preview video
 
 | Info and Status         |          |
 | ----------------------- | -------- |
-| To be executed from     | Assembly |
+| To be executed from     | Assembly or Cue |
 | Spec'd                  | ❌        |
 | Release version roadmap | v1       |
 | Implemented             | ❌        |
