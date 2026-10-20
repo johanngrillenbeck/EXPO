@@ -1,3 +1,4 @@
 .jg
 Docs/_site
 Docs/.jekyll-cache
+.vscode
