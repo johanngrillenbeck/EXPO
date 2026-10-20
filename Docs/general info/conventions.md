@@ -9,7 +9,7 @@ Decide on a short project prefix, which is an arbitrary string delimited from th
 
 # Folder Structure
 
-This is the definitive folder structure that your project directory needs to follow. You can add additional folders after `05_Exports` but mayyybeee choose to not use numbers, as we might add some additional folders to the EXPO spec in case the project grows. EXPO folders will always have number pre-fixes, everything else is ignored.
+This is the definitive folder structure that your project directory needs to follow. You can add additional folders after `05_Delivery` but mayyybeee choose to not use numbers, as we might add some additional folders to the EXPO spec in case the project grows. EXPO folders will always have number pre-fixes, everything else is ignored.
 
 - 01_Footage
 	- RoughCut_v37.mp4
