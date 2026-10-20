@@ -1,7 +1,8 @@
 ---
-title: The Cue project
+title: What are Bus Tracks?
 layout: default
-parent: Folder Structure and Filename Conventions
+parent: The Cue project
+nav-order: 2
 ---
 
 # What are "Bus"-Tracks again?
