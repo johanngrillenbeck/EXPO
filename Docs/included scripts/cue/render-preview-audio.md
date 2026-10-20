@@ -20,3 +20,9 @@ parent: Cue Scripts
 2. Sets "Export" Region Name to "Export $starttc - $endtc" (e.g. "Export 01:02:32:03 - 01:05:01:22")
 3. Looks at the channel configuration of master track and adds appropriate fold down chain
 4. Renders master track as mp3 to 04_Previews
+
+<details markdown="block">
+<summary>Under the hood</summary>
+- Uses the Ultraschall API to make a render table out of the parameters hardcoded into the script via `ultraschall.CreateNewRenderTable` 
+- Then renders the project with this render table via `ultraschall.RenderProject_RenderTable`
+</details>
