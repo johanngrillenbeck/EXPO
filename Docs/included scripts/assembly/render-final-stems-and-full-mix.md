@@ -7,12 +7,13 @@ parent: Assembly Scripts
 
 # Render final STEMS and Full Mix
 
-| Info and Status         |          |
-| ----------------------- | -------- |
-| To be executed from     | Assembly |
-| Spec'd                  | ❌        |
-| Release version roadmap | v1       |
-| Implemented             | ❌        |
+| Info and Status         |                |
+| ----------------------- | -------------- |
+| To be executed from     | Assembly       |
+| Spec'd                  | ❌              |
+| Release version roadmap | v1             |
+| Implemented             | ❌              |
+| Depends on              | Ultraschall API |
 
 1. Prompts which Cues and Versions to render.
 2. Renders each STEM file out to `05_Delivery` (via "Render Item", all Track FX and Item FX are applied!)

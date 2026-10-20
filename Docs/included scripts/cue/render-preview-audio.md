@@ -7,12 +7,13 @@ parent: Cue Scripts
 
 # Render preview audio
 
-| Info and Status         |     |
-| ----------------------- | --- |
-| To be executed from     | Cue |
-| Spec'd                  | ❌   |
-| Release version roadmap | v1  |
-| Implemented             | ❌   |
+| Info and Status         |                |
+| ----------------------- | -------------- |
+| To be executed from     | Cue            |
+| Spec'd                  | ❌              |
+| Release version roadmap | v1             |
+| Implemented             | ❌              |
+| Depends on              | Ultraschall API |
 
 **Script Logic:**
 1. For safety: Checks if "Export" Region's Start and End point are on a whole frame number, moves if necessary.
