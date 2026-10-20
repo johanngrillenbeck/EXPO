@@ -1,13 +1,15 @@
 ---
 title: Conventions
 layout: default
-nav_order: 2
+nav_order: 3
 ---
 
 # Project prefix
-Decide on a short project prefix, which is an arbitrary string delimited from the next element of the filename with an underscore. `XY` is as legal as `NM-S1-E10`. Note that all project files and exports will carry this prefix to identify the project, so keep it short.
+Decide on a short project prefix, which is an arbitrary string delimited from the next element of the filename with an underscore. `XY` is as legal as `NM-S1-E10`. Note that all project files and exports will carry this prefix to identify the project, so keep it short. Project prefices **must not** contain underscores.
 
 # Folder Structure
+
+This is the definitive folder structure that your project directory needs to follow. You can add additional folders after `05_Exports` but mayyybeee choose to not use numbers, as we might add some additional folders to the EXPO spec in case the project grows. EXPO folders will always have number pre-fixes, everything else is ignored.
 
 - 01_Footage
 	- RoughCut_v37.mp4
@@ -18,7 +20,7 @@ Decide on a short project prefix, which is an arbitrary string delimited from th
 	- XY_projectSettings.csv
 - 03_Cues
 	- 03-01_Exports
-	- 03-02_4SWS-Snapshots
+	- 03-02_SWS-Snapshots
 	- XY_1m01_v01.rpp
 	- XY_1m01_v02.rpp
 	- XY_1m02_v02.rpp
@@ -32,7 +34,7 @@ Decide on a short project prefix, which is an arbitrary string delimited from th
 | --------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------- | ------------- |
 | Assembly project            | `[projectPrefix]_Assembly.rpp`                                                    | TF_Assembly.rpp                              | 02_Assembly   |
 | Cue project                 | `[projectPrefix]_[cueId]_[version].rpp`                                           | TF_1m01_v12.rpp                              | 03_Cues       |
-| Multicue project            | `[projectPrefix]_[cueId]_[version]_[cueId]_[version]_[cueId]_[version]_[...].rpp` | TF_1m02_v3_1m03_v2_1m06_v4.wav               | 03_Cues       |
+| Multicue project            | `[projectPrefix]_[cueId]_[version]_[cueId]_[version]_[cueId]_[version]_[...].rpp` | TF_1m02_v3_1m03_v2_1m06_v4.rpp               | 03_Cues       |
 | Video preview               | `[projectPrefix]_[cueId]_[version]_preview.mp4`                                   | TF_1m01_v12_preview.mp4                      | 04_Previews   |
 | Audio preview               | `[projectPrefix]_[cueId]_[version]_preview.mp3`                                   | TF_1m01_v12_preview.mp3                      | 04_Previews   |
 | Pre-mix STEM                | `[projectPrefix]_[cueId]_[version]_[STEM]_pre-mix_TC-[HH.MM.SS.FF].wav`           | TF_1m01_v12_HiStr_pre-mix_TC-01.01.12.19.wav | 03-01_Exports |
@@ -40,16 +42,10 @@ Decide on a short project prefix, which is an arbitrary string delimited from th
 | Full mix created from STEMs | `[projectPrefix]_[cueId]_[version]_full-mix_TC-[HH.MM.SS.FF].wav`                 | TF_1m01_v12_full-mix_TC-01.01.12.19.wav      | 05_Delivery   |
 
 
-As you can see, all file identification tokens are delimited with `_`.
+As you can see, all file identification tokens are delimited with `_`. Therefore, none of these tokens must contain an underscore.
 
-## Scope
-For v1 we limit the scope to:
-- Only one cue inside each video preview file.
-- No versioning of mixed STEMs from assembly.
-
-The roadmap for v2 includes:
-- Being able to select which cues to be included in the video preview
-- Introduce versioning of the final mixing process inside the assembly project by introducing version index and having multiple assembly projects, each with one mix version, inside 02_Assembly.
+## Versioning
+Wherever EXPO supports versioning, the version index should be `v` + any amount of digits. Its valid to do `v01` or `v7` or `v033201`. Leading zeroes are stripped, then the whole number is compared to determine the order.
 
 # Render Conventions
 
@@ -98,3 +94,8 @@ Format: WAV
 bit depth: 24 bit PCM
 
 Save outfile.render_stats.html
+
+# Track type detection logic
+
+Inside CUE projects, your instruments should be routed to bus tracks so that you can export multiple instruments of the same group.
+Since Reaper does not have any form of "track type", we just prefix the track's name with `B ` (B + Space), followed by an arbitrary, but ideally short track name.
