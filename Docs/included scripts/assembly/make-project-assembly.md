@@ -5,14 +5,15 @@ nav-order: 1
 parent: Assembly Scripts
 ---
 
-# Make project ASSEMBLY
+# Make project Assembly
 
 | Info and Status         |          |
 | ----------------------- | -------- |
 | To be executed from     | Assembly |
-| Spec'd                  | ❌        |
 | Release version roadmap | v1       |
 | Implemented             | ❌        |
+
+This documentation is stale. This script should instead: 1. Check using H.validateAssembly() and use the report to fix the issues it found
 
 **Script Logic:**
 1. Sets all project settings to the appropriate ASSEMBLY standard

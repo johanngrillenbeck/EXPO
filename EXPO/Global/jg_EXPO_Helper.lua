@@ -36,6 +36,8 @@ local expoProjectFolders = {
 	["03_Cues"] = true,
 }
 
+-- For Assembly Projects:
+
 local expoMinimumTracksAssembly = {
 	{ name = "VIDEO" },
 	{
@@ -46,11 +48,19 @@ local expoMinimumTracksAssembly = {
 		},
 	},
 }
-
 local expoMinimumRulerLanesAssembly = {
 	{ name = "EXPO (Video Preview)", timebase = "time" },
 	{ name = "EXPO (Final Audio)", timebase = "time" },
 }
+
+-- For Cue Projects: TBD
+
+local expoMinimumTracksCue = {}
+local expoMinimumRulerLanesCue = {}
+
+-------------------------------------------------------------------------------
+-- EXPO v1 project validation report
+-------------------------------------------------------------------------------
 
 ---@class ExpoReport
 ---@field valid boolean Overall validation status
@@ -62,7 +72,11 @@ local expoMinimumRulerLanesAssembly = {
 ---@field missingFolders string[]
 ---@field missingTracks string[]
 ---@field missingRulerLanes string[]
+---@field wrongTimebaseRulerLanes string[] Prescribed lanes that exist but are not on timebase "time"
+---@field validTimebase boolean|nil Project timebase is "time"
+---@field projectTimebase number|nil Raw PROJECT_TIMEBASE (0=time, 1=beats pos/len/rate, 2=beats pos only)
 ---@field frameRate number
+---@field dropFrame boolean
 ---at some point: add version parsing here (v2, v04, v3.5, etc.)
 
 ---@param projectType "Assembly"|"Cue"
@@ -79,7 +93,11 @@ local function createExpoReport(projectType)
 		missingFolders = {},
 		missingTracks = {},
 		missingRulerLanes = {},
+		wrongTimebaseRulerLanes = {},
+		validTimebase = nil,
+		projectTimebase = nil,
 		frameRate = 0,
+		dropFrame = false,
 	}
 end
 
@@ -152,20 +170,83 @@ end
 -- Project structure validation functions
 -------------------------------------------------------------------------------
 
----@param projectType any
----@param tree table
----@return boolean, table missingTracks
-local function containsMinimumTracks(projectType, tree)
-	local missingTracks = {}
-	return true, missingTracks
+local minimumTracksByType = { Assembly = expoMinimumTracksAssembly, Cue = expoMinimumTracksCue }
+local minimumRulerLanesByType = { Assembly = expoMinimumRulerLanesAssembly, Cue = expoMinimumRulerLanesCue }
+local rulerLaneTimebaseValues = { time = 0 } -- RULER_LANE_TIMEBASE values
+
+---Maps the full path of every track (e.g. "CUES/Preview") to whether it is a folder.
+---@return table<string, boolean>
+local function getTrackPaths()
+	local paths = {}
+	local stack = {}
+	for i = 0, reaper.CountTracks(0) - 1 do
+		local track = reaper.GetTrack(0, i)
+		local _, name = reaper.GetTrackName(track)
+		local depth = reaper.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+		local path = #stack > 0 and (table.concat(stack, "/") .. "/" .. name) or name
+		if paths[path] == nil then
+			paths[path] = depth == 1
+		end
+		if depth == 1 then
+			table.insert(stack, name)
+		elseif depth < 0 then
+			for _ = 1, -depth do
+				table.remove(stack)
+			end
+		end
+	end
+	return paths
 end
 
----@param project any
----@param tree any
----@return boolean, table missingRulerLanes
-local function containsMinimumRulerLanes(project, tree)
+---Appends the path of every spec track that is missing (or not a folder although it has children).
+local function collectMissingTracks(spec, parentPath, trackPaths, missing)
+	for _, entry in ipairs(spec) do
+		local path = parentPath ~= "" and (parentPath .. "/" .. entry.name) or entry.name
+		local isFolder = trackPaths[path]
+		if isFolder == nil or (entry.children and not isFolder) then
+			table.insert(missing, path)
+		end
+		if entry.children then
+			collectMissingTracks(entry.children, path, trackPaths, missing)
+		end
+	end
+end
+
+---Extra tracks are allowed; only the prescribed ones are checked.
+---@param projectType "Assembly"|"Cue"
+---@return boolean, string[] missingTracks Full paths like "CUES/Preview"
+local function containsMinimumTracks(projectType)
+	local missingTracks = {}
+	collectMissingTracks(minimumTracksByType[projectType] or {}, "", getTrackPaths(), missingTracks)
+	return #missingTracks == 0, missingTracks
+end
+
+---Extra lanes are allowed; only the prescribed ones are checked.
+---@param projectType "Assembly"|"Cue"
+---@return boolean, string[] missingRulerLanes, string[] wrongTimebaseRulerLanes
+local function containsMinimumRulerLanes(projectType)
 	local missingRulerLanes = {}
-	return true, missingRulerLanes
+	local wrongTimebaseRulerLanes = {}
+
+	-- lane name -> timebase; the first lane with a given name wins
+	local lanes = {}
+	local count = reaper.GetSetProjectInfo(0, "RULER_LANE_COUNT", 0, false)
+	for i = 0, count - 1 do -- lane index base is not documented; verify in REAPER
+		local _, name = reaper.GetSetProjectInfo_String(0, "RULER_LANE_NAME:" .. i, "", false)
+		if lanes[name] == nil then
+			lanes[name] = reaper.GetSetProjectInfo(0, "RULER_LANE_TIMEBASE:" .. i, 0, false)
+		end
+	end
+
+	for _, lane in ipairs(minimumRulerLanesByType[projectType] or {}) do
+		local timebase = lanes[lane.name]
+		if timebase == nil then
+			table.insert(missingRulerLanes, lane.name)
+		elseif timebase ~= rulerLaneTimebaseValues[lane.timebase] then
+			table.insert(wrongTimebaseRulerLanes, lane.name)
+		end
+	end
+	return #missingRulerLanes == 0 and #wrongTimebaseRulerLanes == 0, missingRulerLanes, wrongTimebaseRulerLanes
 end
 
 -------------------------------------------------------------------------------
@@ -212,22 +293,38 @@ function H.validateAssembly()
 		report.prefix = prefix
 	end
 
-	-- is expoRoot folder tree valid?
-	if not isValidTree(expoRoot, expoTree) then
-		report.valid = false
-		report.validExpoTree = false
-		-- at some point: insert missing folders list, but that needs a new tree validation function.
-	else
-		report.validExpoTree = true
+	-- expoRoot is only meaningful if the project sits in the right folder, so otherwise validExpoTree stays nil
+	if report.validProjectFolder then
+		if not isValidTree(expoRoot, expoTree) then
+			report.valid = false
+			report.validExpoTree = false
+			-- at some point: insert missing folders list, but that needs a new tree validation function.
+		else
+			report.validExpoTree = true
+		end
 	end
 
-	-- contains all tracks from expoMinimumTracksAssembly?
+	local hasTracks, missingTracks = containsMinimumTracks("Assembly")
+	report.missingTracks = missingTracks
+	if not hasTracks then
+		report.valid = false
+	end
 
-	-- contains all Ruler Lanes from expoMinimumRulerLanesAssembly?
+	local hasLanes, missingLanes, wrongTimebaseLanes = containsMinimumRulerLanes("Assembly")
+	report.missingRulerLanes = missingLanes
+	report.wrongTimebaseRulerLanes = wrongTimebaseLanes
+	if not hasLanes then
+		report.valid = false
+	end
 
-	-- is project timebase time?
+	report.projectTimebase = reaper.GetSetProjectInfo(0, "PROJECT_TIMEBASE", 0, false)
+	report.validTimebase = report.projectTimebase == 0
+	if not report.validTimebase then
+		report.valid = false
+	end
 
-	-- check framerate
+	-- framerate is only reported; it has no "right" value for an Assembly alone
+	report.frameRate, report.dropFrame = reaper.TimeMap_curFrameRate(0)
 
 	isValid = report.valid
 	return isValid, report
