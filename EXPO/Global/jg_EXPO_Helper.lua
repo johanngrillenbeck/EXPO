@@ -608,6 +608,212 @@ function H.makeValidCue(report)
 end
 
 -------------------------------------------------------------------------------
+-- Cue / Assembly framerate preflight
+-------------------------------------------------------------------------------
+
+local NEW_PROJECT_TAB_COMMAND_ID = 40859
+local CLOSE_PROJECT_TAB_COMMAND_ID = 40860
+local FRAME_RATE_TOLERANCE = 0.001
+
+---Normalizes a project path for comparisons across Windows slash/case variants.
+---@param path string
+---@return string
+local function normalizeProjectPath(path)
+	path = path:gsub("\\", "/"):gsub("/+$", "")
+	if reaper.GetOS():match("Win") then
+		path = path:lower()
+	end
+	return path
+end
+
+---Returns currently open projects as { project, path } records.
+---@return table[]
+local function getOpenProjects()
+	local projects = {}
+	local index = 0
+	while true do
+		local project, path = reaper.EnumProjects(index)
+		if not project then
+			break
+		end
+		table.insert(projects, { project = project, path = path or "" })
+		index = index + 1
+	end
+	return projects
+end
+
+---Finds a currently open project by its full path.
+---@param path string
+---@param projects table[]|nil
+---@return ReaProject|nil project
+local function findOpenProject(path, projects)
+	local wanted = normalizeProjectPath(path)
+	for _, entry in ipairs(projects or getOpenProjects()) do
+		if normalizeProjectPath(entry.path) == wanted then
+			return entry.project
+		end
+	end
+	return nil
+end
+
+---Closes only project tabs created after the given snapshot, never the caller's tabs.
+---@param originalProjects table<ReaProject, boolean>
+---@param callerProject ReaProject
+---@return boolean success, string|nil error
+local function closeTemporaryProjectTabs(originalProjects, callerProject)
+	while true do
+		local temporaryProject
+		for _, entry in ipairs(getOpenProjects()) do
+			if not originalProjects[entry.project] then
+				temporaryProject = entry.project
+				break
+			end
+		end
+		if not temporaryProject then
+			break
+		end
+
+		-- A temporary tab should remain clean. Never discard changes if REAPER or
+		-- another script has modified it unexpectedly.
+		if reaper.IsProjectDirty(temporaryProject) ~= 0 then
+			if callerProject then
+				reaper.SelectProjectInstance(callerProject)
+			end
+			return false, "A temporary project tab became modified and was left open."
+		end
+		reaper.SelectProjectInstance(temporaryProject)
+		reaper.Main_OnCommand(CLOSE_PROJECT_TAB_COMMAND_ID, 0)
+		local stillOpen = false
+		for _, entry in ipairs(getOpenProjects()) do
+			if entry.project == temporaryProject then
+				stillOpen = true
+				break
+			end
+		end
+		if stillOpen then
+			if callerProject then
+				reaper.SelectProjectInstance(callerProject)
+			end
+			return false, "REAPER did not close the temporary project tab."
+		end
+	end
+
+	if callerProject and reaper.EnumProjects(-1) ~= callerProject then
+		reaper.SelectProjectInstance(callerProject)
+	end
+	if callerProject and reaper.EnumProjects(-1) ~= callerProject then
+		return false, "Could not restore the original Cue project tab."
+	end
+	return true
+end
+
+---Compares a Cue project's FPS/drop-frame mode with its paired saved Assembly project.
+---This function is silent and suitable for render/export preflight; callers should proceed only when result.matches is true.
+---@return table result Fields: status, matches, cuePath, assemblyPath, cueFrameRate, assemblyFrameRate, cueDropFrame, assemblyDropFrame
+function H.compareCueAssemblyFrameRate()
+	local result = {
+		status = "invalid_cue_project",
+		matches = nil,
+		cuePath = nil,
+		assemblyPath = nil,
+		cueFrameRate = nil,
+		assemblyFrameRate = nil,
+		cueDropFrame = nil,
+		assemblyDropFrame = nil,
+	}
+
+	local cueProject, cuePath = reaper.EnumProjects(-1)
+	if not cueProject or not cuePath or cuePath == "" then
+		result.status = "cue_not_saved"
+		return result
+	end
+
+	cuePath = cuePath:gsub("\\", "/")
+	result.cuePath = cuePath
+	local expoRoot, projectFolder, fileName = parseProjectPath(cuePath)
+	local prefix = fileName and fileName:match("^([^_]+)_")
+	if not (expoRoot and projectFolder == "03_Cues" and prefix) then
+		return result
+	end
+
+	local assemblyPath = expoRoot .. "/02_Assembly/" .. prefix .. "_Assembly.rpp"
+	result.assemblyPath = assemblyPath
+	result.cueFrameRate, result.cueDropFrame = reaper.TimeMap_curFrameRate(cueProject)
+	if not reaper.file_exists(assemblyPath) then
+		result.status = "assembly_missing"
+		return result
+	end
+
+	local originalProjects = {}
+	local openProjects = getOpenProjects()
+	for _, entry in ipairs(openProjects) do
+		originalProjects[entry.project] = true
+	end
+
+	local assemblyProject = findOpenProject(assemblyPath, openProjects)
+	if assemblyProject then
+		if reaper.IsProjectDirty(assemblyProject) ~= 0 then
+			result.status = "assembly_needs_save"
+			return result
+		end
+		result.assemblyFrameRate, result.assemblyDropFrame = reaper.TimeMap_curFrameRate(assemblyProject)
+	else
+		-- Create a known-safe destination tab before loading the Assembly. This
+		-- prevents Main_openProject from replacing the Cue tab regardless of the
+		-- user's "open projects in tabs" preference.
+		local ok, probeError = xpcall(function()
+			reaper.Main_OnCommand(NEW_PROJECT_TAB_COMMAND_ID, 0)
+			local temporaryProject = reaper.EnumProjects(-1)
+			if not temporaryProject or originalProjects[temporaryProject] then
+				result.status = "temporary_tab_failed"
+				return
+			end
+
+			reaper.Main_openProject("noprompt:" .. assemblyPath)
+			assemblyProject = findOpenProject(assemblyPath)
+			if not assemblyProject then
+				result.status = "assembly_load_failed"
+				return
+			end
+			if reaper.IsProjectDirty(assemblyProject) ~= 0 then
+				result.status = "assembly_needs_save"
+				return
+			end
+			result.assemblyFrameRate, result.assemblyDropFrame = reaper.TimeMap_curFrameRate(assemblyProject)
+		end, debug.traceback)
+
+		if not ok then
+			result.status = "assembly_load_failed"
+			result.detail = probeError
+		end
+
+		local cleanupCallOk, cleanupOk, cleanupError = pcall(closeTemporaryProjectTabs, originalProjects, cueProject)
+		if not cleanupCallOk or not cleanupOk then
+			if not cleanupCallOk then
+				pcall(reaper.SelectProjectInstance, cueProject)
+			end
+			result.status = "cleanup_failed"
+			result.detail = cleanupCallOk and cleanupError or cleanupOk
+			return result
+		end
+		if
+			not ok
+			or not assemblyProject
+			or result.status == "temporary_tab_failed"
+			or result.status == "assembly_load_failed"
+			or result.status == "assembly_needs_save"
+		then
+			return result
+		end
+	end
+
+	result.matches = math.abs(result.cueFrameRate - result.assemblyFrameRate) <= FRAME_RATE_TOLERANCE
+		and result.cueDropFrame == result.assemblyDropFrame
+	result.status = result.matches and "match" or "mismatch"
+	return result
+end
+
+-------------------------------------------------------------------------------
 -- Check if current Cue project is a Multicue Project according to the EXPO 1.0 spec
 -------------------------------------------------------------------------------
 
