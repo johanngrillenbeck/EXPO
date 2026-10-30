@@ -53,10 +53,12 @@ local expoMinimumRulerLanesAssembly = {
 	{ name = "EXPO (Final Audio)", timebase = "time" },
 }
 
--- For Cue Projects: TBD
+-- For Cue Projects:
 
-local expoMinimumTracksCue = {}
-local expoMinimumRulerLanesCue = {}
+local expoMinimumTracksCue = {} -- currently none!
+local expoMinimumRulerLanesCue = {
+	{ name = "EXPO", timebase = "time" },
+}
 
 -------------------------------------------------------------------------------
 -- EXPO v1 project validation report
@@ -73,8 +75,8 @@ local expoMinimumRulerLanesCue = {}
 ---@field missingTracks string[]
 ---@field missingRulerLanes string[]
 ---@field wrongTimebaseRulerLanes string[] Prescribed lanes that exist but are not on timebase "time"
----@field validTimebase boolean|nil Project timebase is "time"
----@field projectTimebase number|nil Raw PROJECT_TIMEBASE (0=time, 1=beats pos/len/rate, 2=beats pos only)
+---@field validTimebase boolean|nil Assembly-only: project timebase is "time"
+---@field projectTimebase number|nil Assembly-only raw PROJECT_TIMEBASE (0=time, 1=beats pos/len/rate, 2=beats pos only)
 ---@field frameRate number
 ---@field dropFrame boolean
 ---at some point: add version parsing here (v2, v04, v3.5, etc.)
@@ -524,9 +526,86 @@ end
 -- Check if current project is a valid Cue Project according to the EXPO 1.0 spec
 -------------------------------------------------------------------------------
 
-function H.validateCue() end
+---@return boolean isValid, ExpoReport report
+function H.validateCue()
+	local report = createExpoReport("Cue")
 
-function H.makeValidCue() end
+	-- Framerate is informational for Cue projects, but is included in every report.
+	report.frameRate, report.dropFrame = reaper.TimeMap_curFrameRate(0)
+
+	local projectPath = getProjectPath()
+	if not projectPath then
+		report.valid = false
+		report.validExpoTree = false
+		report.missingFolders = { "projectPath" }
+		return false, report
+	end
+
+	local expoRoot, projectFolder, fileName = parseProjectPath(projectPath)
+	if not (expoRoot and projectFolder and fileName) then
+		report.valid = false
+		report.validExpoTree = false
+		table.insert(report.missingFolders, "expoRoot")
+		return false, report
+	end
+
+	if projectFolder ~= "03_Cues" then
+		report.valid = false
+		report.validProjectFolder = false
+		table.insert(report.missingFolders, "projectFolder")
+	else
+		report.validProjectFolder = true
+	end
+
+	-- Require only the project prefix and .rpp extension; Cue ID/version parsing is out of scope.
+	local prefix = fileName:match("^([^_]+)_[^/]*%.rpp$")
+	if not prefix then
+		report.valid = false
+		report.validFileName = false
+	else
+		report.validFileName = true
+		report.prefix = prefix
+	end
+
+	-- The root tree is meaningful only when the project is in its prescribed folder.
+	if report.validProjectFolder then
+		if not isValidTree(expoRoot, expoTree) then
+			report.valid = false
+			report.validExpoTree = false
+		else
+			report.validExpoTree = true
+		end
+	end
+
+	local hasLanes, missingLanes, wrongTimebaseLanes = containsMinimumRulerLanes("Cue")
+	report.missingRulerLanes = missingLanes
+	report.wrongTimebaseRulerLanes = wrongTimebaseLanes
+	if not hasLanes then
+		report.valid = false
+	end
+
+	-- Cue projects may use any project timebase; only the EXPO lane is constrained.
+	return report.valid, report
+end
+
+---Fixes missing or incorrectly timed Cue ruler lanes, then validates again.
+---@param report ExpoReport|nil Result of H.validateCue(); validated here if omitted
+---@return boolean isValid, ExpoReport report Fresh report after the fixes
+function H.makeValidCue(report)
+	if not report then
+		_, report = H.validateCue()
+	end
+
+	reaper.Undo_BeginBlock2(0)
+	reaper.PreventUIRefresh(1)
+	fixRulerLanes(report)
+	reaper.PreventUIRefresh(-1)
+	reaper.TrackList_AdjustWindows(false)
+	reaper.UpdateArrange()
+	reaper.Undo_EndBlock2(0, "EXPO: Make project Cue", -1)
+
+	return H.validateCue()
+end
 
 -------------------------------------------------------------------------------
 -- Check if current Cue project is a Multicue Project according to the EXPO 1.0 spec

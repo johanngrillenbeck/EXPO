@@ -95,7 +95,3 @@ bit depth: 24 bit PCM
 
 Save outfile.render_stats.html
 
-# Track type detection logic
-
-Inside CUE projects, your instruments should be routed to bus tracks so that you can export multiple instruments of the same group.
-Since Reaper does not have any form of "track type", we just prefix the track's name with `B ` (B + Space), followed by an arbitrary, but ideally short track name.

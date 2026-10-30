@@ -1,22 +1,26 @@
 ---
-title: Make project CUE
+title: Make project Cue
 layout: default
-nav_order: 1
+nav_order: 2
 parent: Cue Scripts
 ---
 
-# Make project CUE
+# Make project Cue
 
-| Info and Status         |     |
-| ----------------------- | --- |
-| To be executed from     | Cue |
-| Spec'd                  | ❌   |
-| Release version roadmap | v1  |
-| Implemented             | ❌   |
+| Info and Status         |          |
+| ----------------------- | -------- |
+| To be executed from     | Cue      |
+| Spec'd                  | ✅        |
+| Release version roadmap | v1       |
+| Implemented             | ✅        |
 
-**Script Logic:**
-1. Sets all project settings to the appropriate CUE standard
-2. Checks for or creates Region / Marker lanes
-3. Checks for correct folder structure
-4. Checks for correct file name
-5. Outputs project prefix and "everything ok" as final confirmation in the console
+Validates the current project against the EXPO Cue project requirements and repairs the missing or incorrectly configured `EXPO` ruler lane.
+
+**Checks:**
+1. The project is saved inside the `03_Cues` folder.
+2. The EXPO project folder tree exists.
+3. The filename is an `.rpp` file with a non-empty project prefix followed by an underscore. Cue ID and version tokens are not checked.
+4. An `EXPO` ruler lane exists and uses the `Time` timebase.
+5. The current project framerate is displayed for reference.
+
+The script does not change the project timebase, create or change tracks, repair folders or filenames, or inspect regions/multicue status. Remaining path, folder-tree, or filename issues must be fixed manually.

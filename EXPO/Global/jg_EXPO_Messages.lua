@@ -33,8 +33,10 @@ local messages = {
 	manualHeader = "The following issues need to be solved manually:",
 	fixableHeader = "The following issues can be fixed automatically by EXPO.",
 	fixPrompt = "Press OK to fix the issues.",
-	valid = "Congrats, this is valid Assembly Project! Time saved make better art.",
-	fixed = "Issues have been fixed! Continue making music now.",
+	valid = "Congrats, this is valid Assembly Project! Time saved to make better art.",
+	validCue = "Congrats, this is a valid Cue Project! Time saved to make better art.",
+	fixed = "Issues have been fixed! Continue mixing now. Or already delivering?? Well, congrats!",
+	fixedCue = "Cue project issues have been fixed! Continue making music now.",
 	stillInvalid = "Project still invalid :( Take your time to fix the issues and run me again. No hard feelings.",
 	frameRate = "Double check framerate with your source material. If they differ, fix in project settings. Current framerate:",
 }
@@ -52,7 +54,7 @@ local function formatList(text, items)
 	return text .. " " .. table.concat(items, ", ")
 end
 
----Sorts the report into issues the user must fix by hand and issues H.makeValidAssembly() can fix.
+---Sorts the report into issues the user must fix by hand and project issues the matching Make action can fix.
 ---A nil field means "not checked" (e.g. project not saved) and is not an issue.
 ---@param report ExpoReport
 ---@return string[] manual, string[] fixable
