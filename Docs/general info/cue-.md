@@ -16,5 +16,5 @@ Example: `EX_1m03_v12.rpp`
 ## The EXPO Ruler Lane
 
 A Ruler Lane with the name "EXPO" and timebase "Time" must exist.
-Any Region you make here will be available for export. The name is irrelevant, however, EXPO will append the regions name with TC start and TC end numbers.
+Any Region you make here will be available for export. The name of the region is irrelevant, however, EXPO will append the regions name with TC start and TC end numbers. In a single cue project, there must be only one region on the EXPO Ruler Lane. As soon as there are multiple regions on the EXPO lane, the scripts will treat it as a MULTICUE project. More info on the respective page.
 Before each export, EXPO will check if the selected region starts and ends on whole frames. If they don't, EXPO will move the start and end points to the nearest whole frame and update the TC displayed in the region name.
