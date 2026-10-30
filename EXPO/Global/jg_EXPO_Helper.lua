@@ -112,7 +112,6 @@ end
 local function getProjectPath()
 	local _, projectPath = reaper.EnumProjects(-1)
 	if not projectPath or projectPath == "" then
-		reaper.ShowConsoleMsg("EXPO: Could not get project path. Is the project saved?\n")
 		return nil
 	else
 		projectPath = projectPath:gsub("\\", "/")
@@ -151,10 +150,8 @@ local function isValidTree(path, tree)
 	local folders = getSubfolders(path)
 	for _, folder in ipairs(tree) do
 		if not folders[folder.name] then
-			reaper.ShowConsoleMsg("EXPO - Missing folder: " .. folder.name .. "in " .. path .. "\n")
 			return false, folder.name -- a way to not break here but keep iterating so we don't stop at the first missing folder?
 		end
-		--- reaper.ShowConsoleMsg("EXPO - Found folder: " .. folder.name .. "\n")
 		if folder.children then
 			local childPath = path .. "/" .. folder.name
 			local valid = isValidTree(childPath, folder.children)
@@ -173,26 +170,43 @@ end
 local minimumTracksByType = { Assembly = expoMinimumTracksAssembly, Cue = expoMinimumTracksCue }
 local minimumRulerLanesByType = { Assembly = expoMinimumRulerLanesAssembly, Cue = expoMinimumRulerLanesCue }
 local rulerLaneTimebaseValues = { time = 0 } -- RULER_LANE_TIMEBASE values
+local SET_PROJECT_TIMEBASE_TIME_COMMAND_ID = 43461
+local UNSELECT_ALL_TRACKS_COMMAND_ID = 40297
 
----Maps the full path of every track (e.g. "CUES/Preview") to whether it is a folder.
----@return table<string, boolean>
-local function getTrackPaths()
-	local paths = {}
+---@class ExpoTrackInfo
+---@field index number 0-based track index
+---@field name string
+---@field path string Full path like "CUES/Preview"
+---@field isFolder boolean
+
+---@return ExpoTrackInfo[]
+local function getTracks()
+	local tracks = {}
 	local stack = {}
 	for i = 0, reaper.CountTracks(0) - 1 do
 		local track = reaper.GetTrack(0, i)
 		local _, name = reaper.GetTrackName(track)
 		local depth = reaper.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
 		local path = #stack > 0 and (table.concat(stack, "/") .. "/" .. name) or name
-		if paths[path] == nil then
-			paths[path] = depth == 1
-		end
+		table.insert(tracks, { index = i, name = name, path = path, isFolder = depth == 1 })
 		if depth == 1 then
 			table.insert(stack, name)
 		elseif depth < 0 then
 			for _ = 1, -depth do
 				table.remove(stack)
 			end
+		end
+	end
+	return tracks
+end
+
+---Maps each full track path to its track info; the first track with a given path wins.
+---@return table<string, ExpoTrackInfo>
+local function getTrackPaths()
+	local paths = {}
+	for _, track in ipairs(getTracks()) do
+		if paths[track.path] == nil then
+			paths[track.path] = track
 		end
 	end
 	return paths
@@ -202,8 +216,8 @@ end
 local function collectMissingTracks(spec, parentPath, trackPaths, missing)
 	for _, entry in ipairs(spec) do
 		local path = parentPath ~= "" and (parentPath .. "/" .. entry.name) or entry.name
-		local isFolder = trackPaths[path]
-		if isFolder == nil or (entry.children and not isFolder) then
+		local track = trackPaths[path]
+		if track == nil or (entry.children and not track.isFolder) then
 			table.insert(missing, path)
 		end
 		if entry.children then
@@ -221,28 +235,59 @@ local function containsMinimumTracks(projectType)
 	return #missingTracks == 0, missingTracks
 end
 
+---@class ExpoRulerLane
+---@field index number
+---@field guid string
+---@field name string
+---@field timebase number
+
+---@return ExpoRulerLane[]
+local function scanRulerLanes()
+	local lanes = {}
+	local seen = {}
+	local count = reaper.GetSetProjectInfo(0, "RULER_LANE_COUNT", 0, false)
+	-- the index base is undocumented, so probe 0..count and skip slots that hold no lane
+	for i = 0, count do
+		local _, guid = reaper.GetSetProjectInfo_String(0, "RULER_LANE_GUID:" .. i, "", false)
+		if guid ~= "" and not seen[guid] then
+			seen[guid] = true
+			local _, name = reaper.GetSetProjectInfo_String(0, "RULER_LANE_NAME:" .. i, "", false)
+			table.insert(lanes, {
+				index = i,
+				guid = guid,
+				name = name,
+				timebase = reaper.GetSetProjectInfo(0, "RULER_LANE_TIMEBASE:" .. i, 0, false),
+			})
+		end
+	end
+	return lanes
+end
+
+---Maps lane name to lane; the first lane with a given name wins.
+---@return table<string, ExpoRulerLane>
+local function getRulerLanes()
+	local lanes = {}
+	for _, lane in ipairs(scanRulerLanes()) do
+		if lanes[lane.name] == nil then
+			lanes[lane.name] = lane
+		end
+	end
+	return lanes
+end
+
 ---Extra lanes are allowed; only the prescribed ones are checked.
 ---@param projectType "Assembly"|"Cue"
 ---@return boolean, string[] missingRulerLanes, string[] wrongTimebaseRulerLanes
 local function containsMinimumRulerLanes(projectType)
 	local missingRulerLanes = {}
 	local wrongTimebaseRulerLanes = {}
-
-	-- lane name -> timebase; the first lane with a given name wins
-	local lanes = {}
-	local count = reaper.GetSetProjectInfo(0, "RULER_LANE_COUNT", 0, false)
-	for i = 0, count - 1 do -- lane index base is not documented; verify in REAPER
-		local _, name = reaper.GetSetProjectInfo_String(0, "RULER_LANE_NAME:" .. i, "", false)
-		if lanes[name] == nil then
-			lanes[name] = reaper.GetSetProjectInfo(0, "RULER_LANE_TIMEBASE:" .. i, 0, false)
-		end
-	end
+	local lanes = getRulerLanes()
 
 	for _, lane in ipairs(minimumRulerLanesByType[projectType] or {}) do
-		local timebase = lanes[lane.name]
-		if timebase == nil then
+		local existing = lanes[lane.name]
+		if existing == nil then
 			table.insert(missingRulerLanes, lane.name)
-		elseif timebase ~= rulerLaneTimebaseValues[lane.timebase] then
+		elseif existing.timebase ~= rulerLaneTimebaseValues[lane.timebase] then
 			table.insert(wrongTimebaseRulerLanes, lane.name)
 		end
 	end
@@ -257,6 +302,9 @@ end
 function H.validateAssembly()
 	local isValid = true
 	local report = createExpoReport("Assembly")
+
+	-- framerate is only reported (no "right" value for an Assembly alone), so read it before any early return
+	report.frameRate, report.dropFrame = reaper.TimeMap_curFrameRate(0)
 
 	-- get paths and catch nil exceptions (project not saved, folder levels not deep enough, etc.)
 	local projectPath = getProjectPath()
@@ -323,15 +371,153 @@ function H.validateAssembly()
 		report.valid = false
 	end
 
-	-- framerate is only reported; it has no "right" value for an Assembly alone
-	report.frameRate, report.dropFrame = reaper.TimeMap_curFrameRate(0)
-
 	isValid = report.valid
 	return isValid, report
 end
 
-function H.makeValidAssembly()
-	local valid, report = H.validateAssembly()
+-------------------------------------------------------------------------------
+-- Fix functions
+-------------------------------------------------------------------------------
+
+---@param index number
+---@param name string
+---@return MediaTrack
+local function insertTrack(index, name)
+	reaper.InsertTrackAtIndex(index, false)
+	local track = reaper.GetTrack(0, index)
+	reaper.GetSetMediaTrackInfo_String(track, "P_NAME", name, true)
+	return track
+end
+
+---Makes every spec track exist at its prescribed path. Plain tracks are created at the top, folders at the
+---end. Spec names are reserved, so a track with a child's name found anywhere else is moved into the folder
+---(first positions, in spec order) instead of being duplicated. Spec nesting is at most two levels.
+---@param spec table
+local function fixTracks(spec)
+	-- moving tracks goes through the track selection, so keep the user's
+	local savedSelection = {}
+	for i = 0, reaper.CountSelectedTracks(0) - 1 do
+		table.insert(savedSelection, reaper.GetSelectedTrack(0, i))
+	end
+
+	for _, entry in ipairs(spec) do
+		if not entry.children then
+			if not getTrackPaths()[entry.name] then
+				insertTrack(0, entry.name)
+			end
+		else
+			if not getTrackPaths()[entry.name] then
+				insertTrack(reaper.CountTracks(0), entry.name)
+			end
+
+			-- reverse order so the children end up in spec order right below the folder
+			for i = #entry.children, 1, -1 do
+				local childPath = entry.name .. "/" .. entry.children[i].name
+				-- indices shift after every move, so look everything up again
+				local tracks = getTracks()
+				local trackPaths = getTrackPaths()
+
+				if not trackPaths[childPath] then
+					local candidate
+					for _, track in ipairs(tracks) do
+						if track.name == entry.children[i].name then
+							candidate = reaper.GetTrack(0, track.index)
+							break
+						end
+					end
+					candidate = candidate or insertTrack(reaper.CountTracks(0), entry.children[i].name)
+
+					-- makePrevFolder=1 also turns the preceding track into a folder if it isn't one
+					reaper.SetOnlyTrackSelected(candidate)
+					reaper.ReorderSelectedTracks(trackPaths[entry.name].index + 1, 1)
+				end
+			end
+		end
+	end
+
+	reaper.Main_OnCommand(UNSELECT_ALL_TRACKS_COMMAND_ID, 0)
+	for _, track in ipairs(savedSelection) do
+		reaper.SetTrackSelected(track, true)
+	end
+end
+
+---Inserts a lane, names it, and moves it to the top of the ruler.
+---@param name string
+---@param timebase number
+local function createRulerLane(name, timebase)
+	local known = {}
+	for _, lane in ipairs(scanRulerLanes()) do
+		known[lane.guid] = true
+	end
+
+	-- The descriptor suffix is the desired insertion position; value -1 inserts a new lane.
+	reaper.GetSetProjectInfo(0, "RULER_LANE_ORDER:0", -1, true)
+
+	-- Find the inserted lane by GUID because lane indices may shift during insertion.
+	local created, top
+	for _, lane in ipairs(scanRulerLanes()) do
+		if not known[lane.guid] then
+			created = lane
+		end
+		if top == nil or lane.index < top then
+			top = lane.index
+		end
+	end
+	if not created then
+		return
+	end
+
+	reaper.GetSetProjectInfo_String(0, "RULER_LANE_NAME:" .. created.index, name, true)
+	reaper.GetSetProjectInfo(0, "RULER_LANE_TIMEBASE:" .. created.index, timebase, true)
+	if created.index ~= top then
+		reaper.GetSetProjectInfo(0, "RULER_LANE_ORDER:" .. created.index, top, true)
+	end
+end
+
+---@param report ExpoReport
+local function fixRulerLanes(report)
+	local specByName = {}
+	for _, lane in ipairs(minimumRulerLanesByType[report.projectType]) do
+		specByName[lane.name] = rulerLaneTimebaseValues[lane.timebase]
+	end
+
+	-- reverse order so the lanes end up in spec order at the top
+	for i = #report.missingRulerLanes, 1, -1 do
+		local name = report.missingRulerLanes[i]
+		createRulerLane(name, specByName[name])
+	end
+
+	local lanes = getRulerLanes()
+	for _, name in ipairs(report.wrongTimebaseRulerLanes) do
+		reaper.GetSetProjectInfo(0, "RULER_LANE_TIMEBASE:" .. lanes[name].index, specByName[name], true)
+	end
+end
+
+---Fixes what the report flags as project-level issues, then validates again.
+---@param report ExpoReport|nil Result of H.validateAssembly(); validated here if omitted
+---@return boolean isValid, ExpoReport report Fresh report after the fixes
+function H.makeValidAssembly(report)
+	if not report then
+		_, report = H.validateAssembly()
+	end
+
+	reaper.Undo_BeginBlock2(0)
+	reaper.PreventUIRefresh(1)
+
+	if report.validTimebase == false then
+		reaper.Main_OnCommand(SET_PROJECT_TIMEBASE_TIME_COMMAND_ID, 0)
+	end
+	fixRulerLanes(report)
+	if #report.missingTracks > 0 then
+		fixTracks(minimumTracksByType[report.projectType])
+	end
+
+	reaper.PreventUIRefresh(-1)
+	reaper.TrackList_AdjustWindows(false)
+	reaper.UpdateArrange()
+	reaper.Undo_EndBlock2(0, "EXPO: Make project Assembly", -1)
+
+	return H.validateAssembly()
 end
 
 -------------------------------------------------------------------------------
