@@ -1,21 +1,13 @@
 -- @description EXPO Helper
--- @version 0.1
 -- @author Johann Grillenbeck
 -- @about
 --   # EXPO Helper
 --   Common functions to avoid duplication across EXPO scripts.
---   ## Currently included:
---   - isValidFolderTree()
---   - isValidAssembly()
---   - isValidCue()
---   - cueOrMulticue()
---   - isValidRegion()
---   - moveRegionToWholeFrame()
---   - getBusTracksInCue()
 -- @links
 --   GitHub https://github.com/johanngrillenbeck/EXPO
 -- @changelog
 --   Added script.
+-- @noindex
 
 local r = reaper
 
@@ -61,29 +53,33 @@ local expoMinimumRulerLanesAssembly = {
 }
 
 ---@class ExpoReport
----@field valid boolean|nil Overall validation status
----@field type "Assembly"|"Cue" The detected or expected project type
+---@field valid boolean Overall validation status
+---@field projectType "Assembly"|"Cue" The detected or expected project type
 ---@field prefix string|nil Project prefix (e.g. "TF")
----@field messages string[] List of human-readable issues for popups
----@field validFolder boolean|nil
 ---@field validExpoTree boolean|nil
+---@field validProjectFolder boolean|nil
 ---@field validFileName boolean|nil
+---@field missingFolders string[]
 ---@field missingTracks string[]
 ---@field missingRulerLanes string[]
+---@field frameRate number
+---at some point: add version parsing here (v2, v04, v3.5, etc.)
 
----@param type "Assembly"|"Cue"
+---@param projectType "Assembly"|"Cue"
 ---@return ExpoReport
-local function createExpoReport(type)
+local function createExpoReport(projectType)
 	---@type ExpoReport
 	return {
 		valid = true,
-		type = type,
+		projectType = projectType,
 		prefix = nil,
-		messages = {},
-		validFolder = nil,
+		validExpoTree = nil,
+		validProjectFolder = nil,
 		validFileName = nil,
+		missingFolders = {},
 		missingTracks = {},
 		missingRulerLanes = {},
+		frameRate = 0,
 	}
 end
 
@@ -140,7 +136,7 @@ local function isValidTree(path, tree)
 			reaper.ShowConsoleMsg("EXPO - Missing folder: " .. folder.name .. "in " .. path .. "\n")
 			return false, folder.name -- a way to not break here but keep iterating so we don't stop at the first missing folder?
 		end
-		reaper.ShowConsoleMsg("EXPO - Found folder: " .. folder.name .. "\n")
+		--- reaper.ShowConsoleMsg("EXPO - Found folder: " .. folder.name .. "\n")
 		if folder.children then
 			local childPath = path .. "/" .. folder.name
 			local valid = isValidTree(childPath, folder.children)
@@ -153,39 +149,23 @@ local function isValidTree(path, tree)
 end
 
 -------------------------------------------------------------------------------
--- Track structure parsing functions
+-- Project structure validation functions
 -------------------------------------------------------------------------------
+
+---@param projectType any
+---@param tree table
+---@return boolean, table missingTracks
+local function containsMinimumTracks(projectType, tree)
+	local missingTracks = {}
+	return true, missingTracks
+end
 
 ---@param project any
 ---@param tree any
----@return boolean | table Issues
-local function containsMinimumTracks(project, tree)
-	-- return boolean
-end
-
--------------------------------------------------------------------------------
--- Check if current project file resides in valid folder tree structure
--------------------------------------------------------------------------------
-
---- this became obsolete?? crazy programming paradigms being discovered here in real time...
-local function isValidExpoTree(expoRoot)
-	local projectPath = getProjectPath()
-	if not projectPath then
-		return false
-	end
-	reaper.ShowConsoleMsg("EXPO - Current .rpp project path: " .. projectPath .. "\n")
-
-	local expoRoot = getExpoRoot(projectPath)
-	if not expoRoot then
-		return false
-	end
-	reaper.ShowConsoleMsg("EXPO - root folder: " .. expoRoot .. "\n")
-
-	local valid = isValidTree(expoRoot, expoTree)
-	if valid then
-		reaper.ShowConsoleMsg("EXPO - Folder structure is valid!\n")
-	end
-	return valid
+---@return boolean, table missingRulerLanes
+local function containsMinimumRulerLanes(project, tree)
+	local missingRulerLanes = {}
+	return true, missingRulerLanes
 end
 
 -------------------------------------------------------------------------------
@@ -194,36 +174,52 @@ end
 
 ---@return boolean isValid, ExpoReport report
 function H.validateAssembly()
+	local isValid = true
 	local report = createExpoReport("Assembly")
+
+	-- get paths and catch nil exceptions (project not saved, folder levels not deep enough, etc.)
 	local projectPath = getProjectPath()
 	if not projectPath then
-		---set valid false
+		report.valid = false
+		report.validExpoTree = false
+		report.missingFolders = { "projectPath" }
 		return false, report
 	end
-
 	local expoRoot, projectFolder, fileName = parseProjectPath(projectPath)
-	-- is file named correctly?
-	if fileName ~= "^([^_]+)_Assembly%.rpp$" then
-		---set valid false
-		---set validFileName false
-		---set message "invalid filename"
+	if not (expoRoot and projectFolder and fileName) then
+		report.valid = false
+		report.validExpoTree = false
+		table.insert(report.missingFolders, "expoRoot")
 		return false, report
 	end
-	---set validFileName true
-	---parse prefix and add to report
 
 	-- is parent folder "02_Assembly"?
 	if projectFolder ~= "02_Assembly" then
-		---set valid false
-		---set validFolder false
-		---set message "invalid folder: must be named 02_Assembly"
+		report.valid = false
+		report.validProjectFolder = false
+		table.insert(report.missingFolders, "projectFolder") -- in outputReport, if type = assembly and missingFolder = projectFolder, output "Assembly Project must reside in Folder 02_Assembly." Same for Cue and 03_Cues.
+	else
+		report.validProjectFolder = true
+	end
+
+	-- validate fileName and output prefix
+	local prefix = fileName:match("^([^_]+)_Assembly%.rpp$")
+	if not prefix then
+		report.valid = false
+		report.validFileName = false
+	else
+		report.validFileName = true
+		report.prefix = prefix
 	end
 
 	-- is expoRoot folder tree valid?
-	if not isValidTree(expoRoot, expoTree) then -- we must catch "nil" possibility from parseProjectPath
-		---set valid false
-		---set validExpoTree false
-		---set message "invalid filename"
+	if not isValidTree(expoRoot, expoTree) then
+		report.valid = false
+		report.validExpoTree = false
+		-- at some point: insert missing folders list, but that needs a new tree validation function.
+	else
+		report.validExpoTree = true
+	end
 
 	-- contains all tracks from expoMinimumTracksAssembly?
 
@@ -231,22 +227,23 @@ function H.validateAssembly()
 
 	-- is project timebase time?
 
+	-- check framerate
+
+	isValid = report.valid
 	return isValid, report
-	
-	--- showReportMessage(report) -> different local function that prints every message and asks for confirmation to launch the MAKE script.
-	--- Should give an indication that folderTree is not fixable automatically.
-	--- Even better idea: Get rid of the message field in the report and have this report function generate a message based on the reported issues?
 end
 
 function H.makeValidAssembly()
-	local valid, _, report = H.validateAssembly()
+	local valid, report = H.validateAssembly()
 end
 
 -------------------------------------------------------------------------------
 -- Check if current project is a valid Cue Project according to the EXPO 1.0 spec
 -------------------------------------------------------------------------------
 
-function H.isValidCue() end
+function H.validateCue() end
+
+function H.makeValidCue() end
 
 -------------------------------------------------------------------------------
 -- Check if current Cue project is a Multicue Project according to the EXPO 1.0 spec
@@ -254,6 +251,4 @@ function H.isValidCue() end
 
 function H.cueOrMulticue() end
 
--- return H
--- for testing:
-H.isValidAssembly()
+return H

@@ -1,0 +1,5 @@
+--- call H.validateAssembly()
+--- Display success or the issues from the report.
+--- Text should show that folder structure issues need to be fixed manually on the filesystem
+--- Asks for confirmation to fix project-level issues via H.makeAssembly()
+--- checks again via validate and shows output (ideally: Valid Assembly Project)
