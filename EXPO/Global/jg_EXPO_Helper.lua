@@ -817,6 +817,306 @@ end
 -- Check if current Cue project is a Multicue Project according to the EXPO 1.0 spec
 -------------------------------------------------------------------------------
 
-function H.cueOrMulticue() end
+local function splitUnderscoreTokens(text)
+	local tokens = {}
+	for token in (text .. "_"):gmatch("(.-)_") do
+		if token == "" then
+			return nil
+		end
+		table.insert(tokens, token)
+	end
+	return tokens
+end
+
+---Strips leading zeroes for numeric version comparison without numeric overflow.
+---@param version string|number
+---@return string
+function H.normalizeVersion(version)
+	local digits = tostring(version):match("^v?(%d+)$")
+	if not digits then
+		return ""
+	end
+	local normalized = digits:gsub("^0+", "")
+	return normalized ~= "" and normalized or "0"
+end
+
+---Parses a Cue or Multicue project filename into its prefix and ordered cue/version pairs.
+---@param fileName string
+---@return table|nil parsed, string|nil error
+function H.parseCueProjectFilename(fileName)
+	local stem = tostring(fileName or ""):match("([^/\\]+)$") or ""
+	stem = stem:gsub("%.[Rr][Pp][Pp]$", "")
+	local prefix, remainder = stem:match("^([^_]+)_(.+)$")
+	if not prefix or prefix == "" then
+		return nil, "Expected a project prefix followed by cue/version tokens."
+	end
+
+	local tokens = splitUnderscoreTokens(remainder)
+	if not tokens or #tokens == 0 or #tokens % 2 ~= 0 then
+		return nil, "Cue project filename must contain complete cue ID and version pairs."
+	end
+
+	local cues, seenCueIds = {}, {}
+	for i = 1, #tokens, 2 do
+		local cueId = tokens[i]
+		local version = tokens[i + 1]
+		if not cueId:match("^%d+m%d+$") or not version:match("^v%d+$") then
+			return nil, "Invalid cue/version token pair: " .. cueId .. "_" .. version
+		end
+		if seenCueIds[cueId] then
+			return nil, "Cue ID appears more than once in the project filename: " .. cueId
+		end
+		seenCueIds[cueId] = true
+		table.insert(cues, {
+			cueId = cueId,
+			version = version,
+			normalizedVersion = H.normalizeVersion(version),
+		})
+	end
+
+	return { prefix = prefix, cues = cues, isMulticue = #cues > 1, fileName = stem .. ".rpp" }
+end
+
+---Parses the cue/version prefix from a region name; trailing text is intentionally ignored.
+---@param name string
+---@return table|nil parsed
+function H.parseCueRegionName(name)
+	local cueId, version, suffix = tostring(name or ""):match("^%s*(%d+m%d+)_v(%d+)(.*)$")
+	if not cueId then
+		return nil
+	end
+	return {
+		cueId = cueId,
+		version = "v" .. version,
+		normalizedVersion = H.normalizeVersion(version),
+		suffix = suffix,
+	}
+end
+
+---Compares a region collection against project cue/version tokens.
+---The caller decides whether a single unnamed region can safely be offered a rename.
+---@param cues table[]
+---@param regions table[]
+---@return table result matched, missing, unmatched, versionMismatches, duplicates
+function H.matchCueRegions(cues, regions)
+	local result = { matched = {}, missing = {}, unmatched = {}, versionMismatches = {}, duplicates = {} }
+	local expectedById, regionById = {}, {}
+	for _, cue in ipairs(cues) do
+		expectedById[cue.cueId] = cue
+	end
+
+	for _, region in ipairs(regions) do
+		local parsed = H.parseCueRegionName(region.name)
+		region.parsedName = parsed
+		if not parsed or not expectedById[parsed.cueId] then
+			table.insert(result.unmatched, region)
+		else
+			local previous = regionById[parsed.cueId]
+			if previous then
+				local duplicate = result.duplicates[parsed.cueId]
+				if not duplicate then
+					duplicate = { previous }
+					result.duplicates[parsed.cueId] = duplicate
+				end
+				table.insert(duplicate, region)
+			else
+				regionById[parsed.cueId] = region
+				local expected = expectedById[parsed.cueId]
+				region.cue = expected
+				if parsed.normalizedVersion ~= expected.normalizedVersion then
+					region.versionMismatch = true
+					table.insert(result.versionMismatches, region)
+				else
+					region.versionMismatch = false
+					table.insert(result.matched, region)
+				end
+			end
+		end
+	end
+
+	for _, cue in ipairs(cues) do
+		if not regionById[cue.cueId] then
+			table.insert(result.missing, cue)
+		end
+	end
+	return result
+end
+
+---Returns the first ruler lane with the requested exact name.
+---@param name string
+---@return ExpoRulerLane|nil
+function H.getRulerLane(name)
+	for _, lane in ipairs(scanRulerLanes()) do
+		if lane.name == name then
+			return lane
+		end
+	end
+	return nil
+end
+
+---Collects regions assigned to a named ruler lane (not ordinary timeline regions).
+---@param laneName string
+---@param project ReaProject|nil
+---@return table[] regions
+function H.getRegionsOnRulerLane(laneName, project)
+	project = project or 0
+	local lane = H.getRulerLane(laneName)
+	if not lane then
+		return {}, nil
+	end
+
+	local regions = {}
+	for index = 0, reaper.GetNumRegionsOrMarkers(project) - 1 do
+		local marker = reaper.GetRegionOrMarker(project, index, "")
+		if
+			marker
+			and reaper.GetRegionOrMarkerInfo_Value(project, marker, "B_ISREGION") == 1
+			and reaper.GetRegionOrMarkerInfo_Value(project, marker, "I_LANENUMBER") == lane.index
+		then
+			local _, name = reaper.GetSetRegionOrMarkerInfo_String(project, marker, "P_NAME", "", false)
+			local _, guid = reaper.GetSetRegionOrMarkerInfo_String(project, marker, "GUID", "", false)
+			table.insert(regions, {
+				marker = marker,
+				guid = guid,
+				internalIndex = reaper.GetRegionOrMarkerInfo_Value(project, marker, "I_INDEX"),
+				laneIndex = lane.index,
+				name = name,
+				startPos = reaper.GetRegionOrMarkerInfo_Value(project, marker, "D_STARTPOS"),
+				endPos = reaper.GetRegionOrMarkerInfo_Value(project, marker, "D_ENDPOS"),
+			})
+		end
+	end
+	table.sort(regions, function(a, b)
+		if a.startPos == b.startPos then
+			return a.endPos < b.endPos
+		end
+		return a.startPos < b.startPos
+	end)
+	return regions, lane
+end
+
+---Calculates outward frame alignment without mutating the project: start rounds earlier, end rounds later.
+---@param startPos number
+---@param endPos number
+---@param frameRate number
+---@return number alignedStart, number alignedEnd, boolean changed
+function H.alignRegionToFrames(startPos, endPos, frameRate)
+	if type(frameRate) ~= "number" or frameRate <= 0 then
+		return startPos, endPos, false
+	end
+	local epsilon = 1e-7
+	local startFrame = math.floor(startPos * frameRate + epsilon)
+	local endFrame = math.ceil(endPos * frameRate - epsilon)
+	local alignedStart = startFrame / frameRate
+	local alignedEnd = endFrame / frameRate
+	local changed = math.abs(alignedStart - startPos) > 1e-8 or math.abs(alignedEnd - endPos) > 1e-8
+	return alignedStart, alignedEnd, changed
+end
+
+---Formats project time as timecode, optionally using filename-style dot separators.
+---@param position number
+---@param filenameStyle boolean|nil
+---@return string
+function H.formatTimecode(position, filenameStyle)
+	local text = reaper.format_timestr_pos(position, "", 5)
+	if filenameStyle then
+		text = text:gsub(":", ".")
+	end
+	return text
+end
+
+---Parses an EXPO audio-preview filename for strict existing-version conflict checks.
+---@param fileName string
+---@return table|nil parsed
+function H.parsePreviewFilename(fileName)
+	local prefix, cueId, version, hh, mm, ss, ff =
+		tostring(fileName or ""):match("^([^_]+)_([^_]+)_v(%d+)_preview_TC%-(%d+)%.(%d+)%.(%d+)%.(%d+)%.mp3$")
+	if not prefix or not cueId:match("^%d+m%d+$") then
+		return nil
+	end
+	return {
+		prefix = prefix,
+		cueId = cueId,
+		version = "v" .. version,
+		normalizedVersion = H.normalizeVersion(version),
+		timecode = table.concat({ hh, mm, ss, ff }, "."),
+	}
+end
+
+---Finds existing preview files for a cue/version, treating leading-zero versions as equivalent.
+---@param directory string
+---@param prefix string
+---@param cue table
+---@return string[] paths
+function H.findPreviewVersionConflicts(directory, prefix, cue)
+	local matches = {}
+	local index = 0
+	while true do
+		local fileName = reaper.EnumerateFiles(directory, index)
+		if not fileName then
+			break
+		end
+		local parsed = H.parsePreviewFilename(fileName)
+		if
+			parsed
+			and parsed.prefix == prefix
+			and parsed.cueId == cue.cueId
+			and parsed.normalizedVersion == cue.normalizedVersion
+		then
+			table.insert(matches, directory .. "/" .. fileName)
+		end
+		index = index + 1
+	end
+	return matches
+end
+
+---Applies a batch of region edits as one undoable operation.
+---@param edits table[] each entry: region, startPos, endPos, name
+---@param description string
+---@return boolean success, string|nil error
+function H.applyRegionEdits(edits, description)
+	if #edits == 0 then
+		return true
+	end
+
+	local project = reaper.EnumProjects(-1)
+	reaper.Undo_BeginBlock2(project)
+	reaper.PreventUIRefresh(1)
+	local ok, err = xpcall(function()
+		for _, edit in ipairs(edits) do
+			local marker = edit.region.guid
+					and edit.region.guid ~= ""
+					and reaper.GetRegionOrMarker(project, -1, edit.region.guid)
+				or edit.region.marker
+			if not marker then
+				error("Could not find region " .. tostring(edit.region.name) .. " while applying edits.")
+			end
+			if edit.startPos ~= nil then
+				reaper.SetRegionOrMarkerInfo_Value(project, marker, "D_STARTPOS", edit.startPos)
+			end
+			if edit.endPos ~= nil then
+				reaper.SetRegionOrMarkerInfo_Value(project, marker, "D_ENDPOS", edit.endPos)
+			end
+			if edit.name ~= nil then
+				local setOk = reaper.GetSetRegionOrMarkerInfo_String(project, marker, "P_NAME", edit.name, true)
+				if not setOk then
+					error("Could not rename region " .. tostring(edit.region.name) .. ".")
+				end
+			end
+		end
+	end, debug.traceback)
+	reaper.PreventUIRefresh(-1)
+	reaper.UpdateArrange()
+	reaper.Undo_EndBlock2(project, description, -1)
+	return ok, ok and nil or err
+end
+
+function H.cueOrMulticue()
+	local _, projectPath = reaper.EnumProjects(-1)
+	if not projectPath or projectPath == "" then
+		return nil, "Save the current Cue project before rendering."
+	end
+	return H.parseCueProjectFilename(projectPath)
+end
 
 return H
