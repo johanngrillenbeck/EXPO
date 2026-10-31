@@ -40,7 +40,8 @@ end
 
 local H = loadGlobal("jg_EXPO_Helper.lua")
 local Messages = loadGlobal("jg_EXPO_Messages.lua")
-if not (H and Messages) then
+local Render = loadGlobal("jg_EXPO_Render.lua")
+if not (H and Messages and Render) then
 	return
 end
 
@@ -175,36 +176,6 @@ local function createPremixRenderString(ultraschallApi)
 	return renderString
 end
 
-local function loadUltraschallWavBuilder()
-	local api = rawget(_G, "ultraschall")
-	if type(api) == "table" and type(api.CreateRenderCFG_WAV) == "function" then
-		return api
-	end
-
-	local apiPath = r.GetResourcePath() .. "/UserPlugins/ultraschall_api.lua"
-	if not r.file_exists(apiPath) then
-		return nil, "Ultraschall API file was not found at:\n" .. apiPath
-	end
-	local ok, returnedApi = pcall(dofile, apiPath)
-	if not ok then
-		return nil, "Could not load Ultraschall API from:\n" .. apiPath .. "\n\n" .. tostring(returnedApi)
-	end
-	api = rawget(_G, "ultraschall")
-	if
-		(type(api) ~= "table" or type(api.CreateRenderCFG_WAV) ~= "function")
-		and type(returnedApi) == "table"
-		and type(returnedApi.CreateRenderCFG_WAV) == "function"
-	then
-		api = returnedApi
-		rawset(_G, "ultraschall", api)
-	end
-	if type(api) ~= "table" or type(api.CreateRenderCFG_WAV) ~= "function" then
-		return nil,
-			"Ultraschall API loaded, but CreateRenderCFG_WAV is unavailable. Check the installation at:\n" .. apiPath
-	end
-	return api
-end
-
 local function collectBusTracks()
 	local tracks, names = {}, {}
 	local windows = r.GetOS():match("Win") ~= nil
@@ -278,120 +249,19 @@ end
 
 local NATIVE_RENDER_ACTION_ID = 41824 -- File: Render project, using most recent render settings
 
-local NATIVE_RENDER_NUMBER_KEYS = {
-	"RENDER_SETTINGS",
-	"RENDER_BOUNDSFLAG",
-	"RENDER_CHANNELS",
-	"RENDER_SRATE",
-	"RENDER_STARTPOS",
-	"RENDER_ENDPOS",
-	"RENDER_TAILFLAG",
-	"RENDER_TAILMS",
-	"RENDER_ADDTOPROJ",
-	"RENDER_DITHER",
-	"RENDER_NORMALIZE",
-}
-
-local NATIVE_RENDER_STRING_KEYS = {
-	"RENDER_FILE",
-	"RENDER_PATTERN",
-	"RENDER_FORMAT",
-	"RENDER_FORMAT2",
-}
-
-local function snapshotNativeRenderSettings(project)
-	local state = { active = true, project = project, numbers = {}, strings = {} }
-	state.dirty = r.GetSetProjectInfo(project, "DIRTY", 0, false)
-	if type(state.dirty) ~= "number" then
-		return nil, "Could not read the Cue project's current dirty state."
-	end
-	for _, key in ipairs(NATIVE_RENDER_NUMBER_KEYS) do
-		local ok, value = pcall(r.GetSetProjectInfo, project, key, 0, false)
-		if not ok or type(value) ~= "number" then
-			return nil, "Could not read the current REAPER render setting " .. key .. "."
-		end
-		state.numbers[key] = value
-	end
-	for _, key in ipairs(NATIVE_RENDER_STRING_KEYS) do
-		local ok, retval, value = pcall(r.GetSetProjectInfo_String, project, key, "", false)
-		if not ok or not retval or type(value) ~= "string" then
-			return nil, "Could not read the current REAPER render setting " .. key .. "."
-		end
-		state.strings[key] = value
-	end
-	return state
-end
-
-local function restoreNativeRenderSettings(state, restoreDirty)
-	if not state or not state.active then
-		return true, nil
-	end
-	local errors = {}
-	for _, key in ipairs(NATIVE_RENDER_STRING_KEYS) do
-		local ok, retval = pcall(r.GetSetProjectInfo_String, state.project, key, state.strings[key], true)
-		if not ok or not retval then
-			table.insert(errors, "Could not restore REAPER render setting " .. key .. ".")
-		end
-	end
-	for _, key in ipairs(NATIVE_RENDER_NUMBER_KEYS) do
-		local ok, value = pcall(r.GetSetProjectInfo, state.project, key, state.numbers[key], true)
-		if not ok or type(value) ~= "number" or math.abs(value - state.numbers[key]) > 1e-7 then
-			table.insert(errors, "Could not restore REAPER render setting " .. key .. ".")
-		end
-	end
-	if restoreDirty ~= false then
-		local dirtyOk, dirtyValue = pcall(r.GetSetProjectInfo, state.project, "DIRTY", state.dirty, true)
-		if not dirtyOk or type(dirtyValue) ~= "number" or dirtyValue ~= state.dirty then
-			table.insert(errors, "Could not restore the Cue project's previous dirty state.")
-		end
-	end
-	if #errors == 0 then
-		state.active = false
-		return true, nil
-	end
-	return false, table.concat(errors, "\n")
-end
-
-local function setNativeRenderNumber(project, key, value)
-	local ok, returnedValue = pcall(r.GetSetProjectInfo, project, key, value, true)
-	if not ok or type(returnedValue) ~= "number" then
-		return false, "Could not set REAPER render setting " .. key .. "."
-	end
-	local readOk, actualValue = pcall(r.GetSetProjectInfo, project, key, 0, false)
-	if not readOk or type(actualValue) ~= "number" or math.abs(actualValue - value) > 1e-7 then
-		return false,
-			"REAPER did not retain render setting " .. key .. ": expected " .. tostring(value) .. ", got " .. tostring(
-				actualValue
-			)
-	end
-	return true
-end
-
-local function setNativeRenderString(project, key, value)
-	local ok, retval = pcall(r.GetSetProjectInfo_String, project, key, value, true)
-	if not ok or not retval then
-		return false, "Could not set REAPER render setting " .. key .. "."
-	end
-	local readOk, getOk, actualValue = pcall(r.GetSetProjectInfo_String, project, key, "", false)
-	if not readOk or not getOk or actualValue ~= value then
-		return false, "REAPER did not retain render setting " .. key .. "."
-	end
-	return true
-end
-
 local function applyNativeRenderSettings(project, renderString, cueSettings)
 	local numberSettings = {
-		{ "RENDER_SETTINGS", 3 }, -- REAPER test dialog confirms selected-track stems
-		{ "RENDER_BOUNDSFLAG", 0 }, -- custom start/end bounds
-		{ "RENDER_CHANNELS", cueSettings.channels },
-		{ "RENDER_SRATE", 48000 },
-		{ "RENDER_STARTPOS", cueSettings.region.alignedStart },
-		{ "RENDER_ENDPOS", cueSettings.region.alignedEnd },
-		{ "RENDER_TAILFLAG", 0 },
-		{ "RENDER_TAILMS", 0 },
-		{ "RENDER_ADDTOPROJ", 2 }, -- do not add to project; skip files likely to be silent
-		{ "RENDER_DITHER", 0 },
-		{ "RENDER_NORMALIZE", 0 },
+		RENDER_SETTINGS = 3, -- REAPER test dialog confirms selected-track stems
+		RENDER_BOUNDSFLAG = 0, -- custom start/end bounds
+		RENDER_CHANNELS = cueSettings.channels,
+		RENDER_SRATE = 48000,
+		RENDER_STARTPOS = cueSettings.region.alignedStart,
+		RENDER_ENDPOS = cueSettings.region.alignedEnd,
+		RENDER_TAILFLAG = 0,
+		RENDER_TAILMS = 0,
+		RENDER_ADDTOPROJ = 2, -- do not add to project; skip files likely to be silent
+		RENDER_DITHER = 0,
+		RENDER_NORMALIZE = 0,
 	}
 	local stringSettings = {
 		RENDER_FILE = cueSettings.outputFolder:gsub("[/\\]+$", ""),
@@ -399,19 +269,7 @@ local function applyNativeRenderSettings(project, renderString, cueSettings)
 		RENDER_FORMAT = renderString,
 		RENDER_FORMAT2 = "",
 	}
-	for _, setting in ipairs(numberSettings) do
-		local ok, err = setNativeRenderNumber(project, setting[1], setting[2])
-		if not ok then
-			return false, err
-		end
-	end
-	for key, value in pairs(stringSettings) do
-		local ok, err = setNativeRenderString(project, key, value)
-		if not ok then
-			return false, err
-		end
-	end
-	return true
+	return Render.applyNativeRenderSettings(project, numberSettings, stringSettings)
 end
 
 local function verifyRenderState(projectHandle, busTracks, cueSettings)
@@ -512,34 +370,6 @@ local function verifyRenderState(projectHandle, busTracks, cueSettings)
 		return nil, state .. "\n\nSelection/configuration problems:\n- " .. table.concat(issues, "\n- ")
 	end
 	return state
-end
-
-local function snapshotDirectoryFiles(directory)
-	local files, index = {}, 0
-	while true do
-		local fileName = r.EnumerateFiles(directory, index)
-		if not fileName then
-			break
-		end
-		files[normalizedPath(fileName)] = true
-		index = index + 1
-	end
-	return files
-end
-
-local function collectNewWaveFiles(directory, before)
-	local files, index = {}, 0
-	while true do
-		local fileName = r.EnumerateFiles(directory, index)
-		if not fileName then
-			break
-		end
-		if fileName:lower():match("%.wav$") and not before[normalizedPath(fileName)] then
-			table.insert(files, directory:gsub("[/\\]+$", "") .. "/" .. fileName)
-		end
-		index = index + 1
-	end
-	return files
 end
 
 local function snapshotTrackState(busTracks)
@@ -736,7 +566,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 		return
 	end
 
-	local renderSettingsState, settingsError = snapshotNativeRenderSettings(details.projectHandle)
+	local renderSettingsState, settingsError = Render.snapshotNativeRenderSettings(details.projectHandle)
 	if not renderSettingsState then
 		stop(
 			"Could not snapshot the current REAPER render settings. No render was started.\n\n"
@@ -748,7 +578,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 	local restoreOk, restoreError
 	r.atexit(function()
 		local tracksRestored = restoreTrackState(state)
-		restoreNativeRenderSettings(renderSettingsState, tracksRestored)
+		Render.restoreNativeRenderSettings(renderSettingsState, tracksRestored)
 	end)
 	local rendered, failed, unexpected, silentCues = {}, {}, {}, {}
 	local ok, err = xpcall(function()
@@ -778,7 +608,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 			if not renderState then
 				error("Not rendering because the pre-render state is unexpected.\n\n" .. tostring(stateError))
 			end
-			local filesBefore = snapshotDirectoryFiles(outputFolder)
+			local filesBefore = Render.snapshotDirectoryFiles(outputFolder)
 			local renderOk, renderError = pcall(r.Main_OnCommand, NATIVE_RENDER_ACTION_ID, 0)
 			if not renderOk then
 				error(
@@ -786,7 +616,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 				)
 			end
 			local matchedStemFiles = 0
-			for _, path in ipairs(collectNewWaveFiles(outputFolder, filesBefore)) do
+			for _, path in ipairs(Render.collectNewFiles(outputFolder, filesBefore, "wav")) do
 				local fileName = path:gsub("\\", "/"):match("([^/]+)$") or path
 				table.insert(rendered, path)
 				if plan.expected[normalizedPath(fileName)] then
@@ -807,7 +637,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 		end
 	end, debug.traceback)
 	restoreOk, restoreError = restoreTrackState(state)
-	local settingsRestoreOk, settingsRestoreError = restoreNativeRenderSettings(renderSettingsState, restoreOk)
+	local settingsRestoreOk, settingsRestoreError = Render.restoreNativeRenderSettings(renderSettingsState, restoreOk)
 	if not ok then
 		table.insert(failed, tostring(err))
 	end
@@ -850,7 +680,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 end
 
 local function main()
-	local ultraschallApi, apiError = loadUltraschallWavBuilder()
+	local ultraschallApi, apiError = Render.loadUltraschall({ "CreateRenderCFG_WAV" })
 	if not ultraschallApi then
 		stop(
 			"Ultraschall API could not be loaded. Install it via ReaPack or check the installation, then run this action again.\n\n"

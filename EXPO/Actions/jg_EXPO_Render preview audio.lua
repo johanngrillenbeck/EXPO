@@ -2,7 +2,7 @@
 -- @author Johann Grillenbeck
 -- @about
 --   # EXPO: Render preview audio
---   Validates Cue regions, aligns them to frames and renders selected previews via Ultraschall.
+--   Validates Cue regions, aligns them to frames and renders selected previews via REAPER.
 -- @links
 --   GitHub https://github.com/johanngrillenbeck/EXPO
 -- @noindex
@@ -22,62 +22,9 @@ local PREVIEW_RENDER_STRING = {
 	writeReplayGain = false,
 }
 
--- Ultraschall 5.3 RenderTable reference and preview-specific active overrides.
--- Commented entries document API defaults only; CreateNewRenderTable supplies them.
--- ReaScript action-specific values (format/source/bounds/paths) are not Global defaults.
-local PREVIEW_RENDER_TABLE = {
-	AddToProj = false, -- boolean; do not add rendered items to new tracks (factory default false)
-	-- Brickwall_Limiter_Enabled = false, -- boolean; limiter enabled (default false)
-	-- Brickwall_Limiter_Method = 1, -- integer; 1 peak, 2 true peak (default 1)
-	-- Brickwall_Limiter_Target = 1, -- number; limiter target in dB (default 1)
-	Source = 0, -- integer; 0 master mix; 1 mix+stems; 3 selected-track stems; 8 region matrix; 32 selected items; 64 items via master; 128 selected tracks via master; 136 region matrix via master; 4096 razor areas; 4224 razor areas via master
-	Bounds = 0, -- integer; 0 custom range; 1 project; 2 time selection; 3 project regions; 4 selected items (Source=32); 5 selected regions; 6 razor areas; 7 all markers; 8 selected markers
-	-- Startposition = 0, -- number; custom range start in seconds (default 0; set dynamically per cue)
-	-- Endposition = 0, -- number; custom range end in seconds (default 0; set dynamically per cue)
-	-- TailFlag = 18, -- integer bitmask: 1 custom, 2 project, 4 time selection, 8 all regions, 16 selected items, 32 selected regions, 64 razor areas (default 18)
-	-- TailMS = 0, -- integer; tail length in milliseconds (CreateNewRenderTable factory value 0)
-	-- RenderFile = "", -- string; output directory (factory default empty; set dynamically)
-	-- RenderPattern = "", -- string; output filename/pattern (factory default empty; set dynamically)
-	SampleRate = 48000, -- integer; output sample rate (preview convention; factory default 44100)
-	-- Channels = 2, -- integer; 1 mono, 2 stereo, 3+ channel count (default 2)
-	-- OfflineOnlineRendering = 0, -- integer; 0 full-speed offline, 1 1x offline, 2 online, 3 online idle, 4 offline idle (default 0)
-	-- ProjectSampleRateFXProcessing = true, -- boolean; project sample rate for mixing/FX (default true)
-	RenderResample = 10, -- integer; 0 64pt, 1 linear, 2 point, 3 192pt, 4 384pt, 5 linear+IIR, 6 linear+IIRx2, 7 16pt, 8 512pt, 9 768pt, 10 r8brain free (preview convention)
-	-- OnlyMonoMedia = false, -- boolean; mono-only media to mono files (default false)
-	-- MultiChannelFiles = false, -- boolean; multichannel tracks to multichannel files (default false)
-	-- Dither = 0, -- integer bitmask: 1 master dither, 2 master noise shaping, 4 stem dither, 8 stem noise shaping (default 0)
-	-- Normalize_Only_Files_Too_Loud = false, -- boolean; normalize only files exceeding target (default false)
-	-- RenderString = "", -- string; Base64 render-format config (factory default empty; set from MP3 builder)
-	SilentlyIncrementFilename = false, -- boolean; silently increment on conflict (factory default true; EXPO versioning forbids increments)
-	CloseAfterRender = true, -- boolean; close render dialog when done (factory default true)
-	-- SaveCopyOfProject = false, -- boolean; save RPP copy alongside render (default false)
-	-- RenderQueueDelay = false, -- boolean; delay queued renders (default false)
-	-- RenderQueueDelaySeconds = 0, -- integer; queued render delay seconds (default 0)
-	-- EmbedStretchMarkers = false, -- boolean; embed stretch markers/transient guides (default false)
-	-- RenderString2 = "", -- string; secondary-format Base64 render config (default empty)
-	-- EmbedTakeMarkers = false, -- boolean; embed take markers (default false)
-	-- NoSilentRender = false, -- boolean; skip likely-silent outputs (default false)
-	-- EmbedMetaData = false, -- boolean; embed metadata (default false)
-	-- Enable2ndPassRender = false, -- boolean; enable second pass (default false)
-	-- Normalize_Enabled = false, -- boolean; enable normalization (default false)
-	-- Normalize_Method = 0, -- integer; 0 LUFS-I, 1 RMS-I, 2 peak, 3 true peak, 4 LUFS-M max, 5 LUFS-S max (default 0)
-	-- Normalize_Stems_to_Master_Target = false, -- boolean; common master target for stems vs per-file (default false)
-	-- Normalize_Target = -24, -- number; normalization target dB (factory default -24)
-	-- FadeIn_Enabled = false, -- boolean; apply render fade-in (default false)
-	-- FadeIn = 0, -- number; fade-in seconds (default 0)
-	-- FadeIn_Shape = 0, -- integer; 0 linear, 1 inverted quadratic, 2 quadratic, 3 inverted quartic, 4 quartic, 5 cosine S, 6 quartic S (default 0)
-	-- FadeOut_Enabled = false, -- boolean; apply render fade-out (default false)
-	-- FadeOut = 0, -- number; fade-out seconds (default 0)
-	-- FadeOut_Shape = 0, -- integer; 0 linear, 1 inverted quadratic, 2 quadratic, 3 inverted quartic, 4 quartic, 5 cosine S, 6 quartic S (factory default is false)
-	-- OnlyChannelsSentToParent = false, -- boolean; render only channels sent to parent (default false)
-	-- RenderStems_Prefader = false, -- boolean; render stems pre-fader (default false)
-	-- Preserve_Start_Offset = false, -- boolean; preserve selected-media-item start offset (default false)
-	-- Preserve_Metadata = false, -- boolean; preserve selected-media-item metadata (default false)
-	-- RenderTable = true, -- boolean; marker identifying a valid render table (CreateNewRenderTable sets true)
-	-- ReturnToDialog = false, -- boolean; return to render dialog after rendering (default false)
-	-- SaveRenderStatsFile = 0, -- integer; 0 none, 1 combined, 2 per rendered file (default 0)
-}
-
+-- Preview render bounds, source, output settings, and format are applied through
+-- REAPER's native project render settings below. Ultraschall is used only to
+-- create the MP3 format configuration string.
 local function loadGlobal(fileName)
 	local source = debug.getinfo(1, "S").source:match("^@(.+)$") or ""
 	local actionDir = source:match("^(.*)[/\\]") or ""
@@ -230,20 +177,64 @@ local function createPreviewRenderString(ultraschallApi)
 	return renderString
 end
 
-local function buildPreviewRenderTable(ultraschallApi, renderString, outputFolder, plan)
-	local overrides = {}
-	for key, value in pairs(PREVIEW_RENDER_TABLE) do
-		overrides[key] = value
+local NATIVE_RENDER_ACTION_ID = 41824 -- File: Render project, using most recent render settings
+
+local function normalizedFileName(fileName)
+	local key = tostring(fileName or ""):gsub("\\", "/")
+	if r.GetOS():match("Win") then
+		key = key:lower()
 	end
-	overrides.Startposition = plan.region.alignedStart
-	overrides.Endposition = plan.region.alignedEnd
-	overrides.RenderFile = outputFolder:gsub("[/\\]+$", "") .. "/"
-	overrides.RenderPattern = plan.stem
-	overrides.RenderString = renderString
-	return Render.createRenderTable(ultraschallApi, overrides)
+	return key
 end
 
-local function runRender(details, regions, selectedByCueId, nameOverrides, ultraschallApi, renderString)
+local function configurePreviewRender(project, outputFolder, renderString, plan)
+	local numbers = {
+		RENDER_SETTINGS = 0, -- master mix; do not render selected-track stems
+		RENDER_BOUNDSFLAG = 0, -- custom start/end bounds
+		RENDER_CHANNELS = 2,
+		RENDER_SRATE = 48000,
+		RENDER_STARTPOS = plan.region.alignedStart,
+		RENDER_ENDPOS = plan.region.alignedEnd,
+		RENDER_TAILFLAG = 0,
+		RENDER_TAILMS = 0,
+		RENDER_ADDTOPROJ = 2, -- do not add to project; skip likely-silent output
+		RENDER_DITHER = 0,
+		RENDER_NORMALIZE = 0,
+	}
+	local strings = {
+		RENDER_FILE = outputFolder:gsub("[/\\]+$", ""),
+		RENDER_PATTERN = plan.stem,
+		RENDER_FORMAT = renderString,
+		RENDER_FORMAT2 = "",
+	}
+	return numbers, strings, Render.applyNativeRenderSettings(project, numbers, strings)
+end
+
+local function verifyPreviewRenderState(project, projectPath, numbers, strings)
+	local activeProject, activePath = r.EnumProjects(-1)
+	if activeProject ~= project then
+		return false,
+			"The active project changed before rendering. Expected Cue project:\n"
+				.. tostring(projectPath)
+				.. "\nActive project:\n"
+				.. tostring(activePath)
+	end
+	for key, expected in pairs(numbers) do
+		local actual = r.GetSetProjectInfo(project, key, 0, false)
+		if type(actual) ~= "number" or math.abs(actual - expected) > 1e-7 then
+			return false, key .. " is " .. tostring(actual) .. "; expected " .. tostring(expected) .. "."
+		end
+	end
+	for key, expected in pairs(strings) do
+		local _, actual = r.GetSetProjectInfo_String(project, key, "", false)
+		if actual ~= expected then
+			return false, key .. " was not retained: expected '" .. expected .. "', found '" .. tostring(actual) .. "'."
+		end
+	end
+	return true
+end
+
+local function runRender(details, regions, selectedByCueId, nameOverrides, renderString)
 	local outputFolder = H.getExpoRoot(details.projectPath) .. "/04_Previews"
 	local outputPlans, conflicts = {}, {}
 	local conflictSet = {}
@@ -370,22 +361,71 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, ultra
 		end
 	end
 
-	local rendered, failed = {}, {}
-	for _, plan in ipairs(outputPlans) do
-		local renderTable, buildError = buildPreviewRenderTable(ultraschallApi, renderString, outputFolder, plan)
-		if not renderTable then
-			table.insert(failed, plan.outputPath .. "\n  " .. tostring(buildError))
-			break
-		end
-		local result = Render.renderProjectWithTable(ultraschallApi, renderTable)
-		if result.ok then
-			for _, file in ipairs(result.files) do
-				table.insert(rendered, file)
+	local renderSettingsState, settingsError = Render.snapshotNativeRenderSettings(details.projectHandle)
+	if not renderSettingsState then
+		stop(
+			"Could not snapshot the current REAPER render settings. No render was started.\n\n"
+				.. tostring(settingsError)
+		)
+		return
+	end
+	r.atexit(function()
+		Render.restoreNativeRenderSettings(renderSettingsState)
+	end)
+
+	local rendered, failed, unexpected = {}, {}, {}
+	local ok, err = xpcall(function()
+		for _, plan in ipairs(outputPlans) do
+			local numbers, strings, configured, configureError =
+				configurePreviewRender(details.projectHandle, outputFolder, renderString, plan)
+			if not configured then
+				error(plan.outputPath .. "\n  " .. tostring(configureError))
 			end
-		else
-			table.insert(failed, plan.outputPath .. "\n  " .. tostring(result.detail))
-			break
+			local verified, verifyError =
+				verifyPreviewRenderState(details.projectHandle, details.projectPath, numbers, strings)
+			if not verified then
+				error("Not rendering because the pre-render state is unexpected.\n\n" .. tostring(verifyError))
+			end
+
+			local filesBefore = Render.snapshotDirectoryFiles(outputFolder)
+			local renderOk, renderError = pcall(r.Main_OnCommand, NATIVE_RENDER_ACTION_ID, 0)
+			if not renderOk then
+				error("REAPER's native render action failed: " .. tostring(renderError))
+			end
+
+			local newMp3Files = Render.collectNewFiles(outputFolder, filesBefore, "mp3")
+			local expectedName = plan.outputPath:gsub("^.*[/\\]", "")
+			local expectedKey = normalizedFileName(expectedName)
+			local expectedCreated = false
+			for _, path in ipairs(newMp3Files) do
+				local fileName = path:gsub("\\", "/"):match("([^/]+)$") or path
+				if normalizedFileName(fileName) == expectedKey then
+					expectedCreated = true
+					table.insert(rendered, path)
+				else
+					table.insert(unexpected, path)
+				end
+			end
+			if not expectedCreated then
+				error(
+					"The exact expected preview was not created (the render may have been cancelled or produced no audible output):\n"
+						.. plan.outputPath
+				)
+			end
+			if #unexpected > 0 then
+				error("REAPER created unexpected or incremented MP3 files:\n" .. table.concat(unexpected, "\n"))
+			end
 		end
+	end, debug.traceback)
+	local settingsRestoreOk, settingsRestoreError = Render.restoreNativeRenderSettings(renderSettingsState)
+	if not ok then
+		table.insert(failed, tostring(err))
+	end
+	if not settingsRestoreOk then
+		table.insert(
+			failed,
+			"Could not restore the original REAPER render settings:\n" .. tostring(settingsRestoreError)
+		)
 	end
 
 	if #failed > 0 then
@@ -393,6 +433,7 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, ultra
 			"Rendering stopped after an error. Any confirmed region edits and completed renders have been kept.\n\n"
 				.. table.concat(failed, "\n\n")
 				.. (#rendered > 0 and ("\n\nCompleted renders:\n" .. table.concat(rendered, "\n")) or "")
+				.. (#unexpected > 0 and ("\n\nUnexpected files:\n" .. table.concat(unexpected, "\n")) or "")
 		)
 	elseif #rendered > 0 then
 		stop("Preview render complete:\n\n" .. table.concat(rendered, "\n"))
@@ -402,7 +443,7 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, ultra
 end
 
 local function main()
-	local ultraschallApi, apiError = Render.loadUltraschall()
+	local ultraschallApi, apiError = Render.loadUltraschall({ "CreateRenderCFG_MP3CBR" })
 	if not ultraschallApi then
 		stop(
 			"Ultraschall API could not be loaded. Install it via ReaPack or check the installation, then run this action again.\n\n"
@@ -426,11 +467,12 @@ local function main()
 		stop("Could not parse the Cue project filename.\n\n" .. tostring(parseError))
 		return
 	end
-	local _, projectPath = r.EnumProjects(-1)
+	local projectHandle, projectPath = r.EnumProjects(-1)
 	local details = {
 		prefix = parsed.prefix,
 		cues = parsed.cues,
 		projectPath = projectPath,
+		projectHandle = projectHandle,
 	}
 
 	local regions = H.getRegionsOnRulerLane("EXPO", 0)
@@ -538,7 +580,7 @@ local function main()
 		for _, region in ipairs(selectedRegions) do
 			selectedByCueId[region.cue.cueId] = region
 		end
-		runRender(details, regions, selectedByCueId, renameOverrides, ultraschallApi, renderString)
+		runRender(details, regions, selectedByCueId, renameOverrides, renderString)
 	end
 
 	if #details.cues > 1 then
