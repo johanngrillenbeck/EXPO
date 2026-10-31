@@ -34,6 +34,7 @@ local PREMIX_RENDER_TABLE = {
 	-- Brickwall_Limiter_Method = 1, -- integer; 1 peak, 2 true peak (factory default 1)
 	-- Brickwall_Limiter_Target = 1, -- number; limiter target in dB (factory default 1)
 	Source = 3, -- integer; 3 selected-track stems (not via Master)
+	ParallelRender = true, -- boolean; REAPER enables parallel rendering for selected-track stem source
 	Bounds = 0, -- integer; 0 custom range
 	-- Startposition = 0, -- number; custom range start in seconds (set dynamically per cue)
 	-- Endposition = 0, -- number; custom range end in seconds (set dynamically per cue)
@@ -379,6 +380,88 @@ local function prepareTracksForRender(state)
 	return ok, err
 end
 
+local function verifyRenderState(projectHandle, projectPath, busTracks, renderTable)
+	local issues = {}
+	if renderTable.Source ~= 3 then
+		table.insert(
+			issues,
+			"RenderTable.Source is " .. tostring(renderTable.Source) .. "; expected 3 (selected-track stems)."
+		)
+	end
+
+	local activeProject, activePath = r.EnumProjects(-1)
+	if projectHandle and activeProject ~= projectHandle then
+		table.insert(
+			issues,
+			"The active project changed before rendering. Expected Cue project:\n"
+				.. tostring(projectPath)
+				.. "\nActive project:\n"
+				.. tostring(activePath)
+		)
+	end
+
+	local expected = {}
+	local expectedNames = {}
+	local expectedNameList = {}
+	for _, bus in ipairs(busTracks) do
+		expected[bus.track] = true
+		expectedNames[bus.track] = bus.stem
+		table.insert(expectedNameList, bus.stem)
+	end
+	local actual = {}
+	local actualNameList = {}
+	for index = 0, r.CountSelectedTracks(0) - 1 do
+		local track = r.GetSelectedTrack(0, index)
+		local _, name = r.GetTrackName(track)
+		actual[track] = true
+		table.insert(actualNameList, name)
+		if not expected[track] then
+			table.insert(issues, "Unexpected selected track at render time: " .. tostring(name))
+		end
+	end
+	local masterSelected = false
+	if type(r.CountSelectedTracks2) == "function" and type(r.GetSelectedTrack2) == "function" then
+		for index = 0, r.CountSelectedTracks2(0, true) - 1 do
+			local track = r.GetSelectedTrack2(0, index, true)
+			if track == r.GetMasterTrack(0) then
+				masterSelected = true
+				table.insert(issues, "The Master track is selected at render time.")
+			end
+		end
+	end
+	for _, bus in ipairs(busTracks) do
+		if not actual[bus.track] then
+			table.insert(issues, "Bus track is not selected at render time: " .. bus.stem)
+		end
+		local _, name = r.GetTrackName(bus.track)
+		if name ~= expectedNames[bus.track] then
+			table.insert(
+				issues,
+				"Bus track name was not temporarily normalized for $track: expected '"
+					.. expectedNames[bus.track]
+					.. "', found '"
+					.. tostring(name)
+					.. "'."
+			)
+		end
+	end
+
+	local state = string.format(
+		"Render preflight: Source=%s; selected tracks=%d/%d [%s]; expected buses=[%s]; Master selected=%s; active project=%s",
+		tostring(renderTable.Source),
+		r.CountSelectedTracks(0),
+		#busTracks,
+		table.concat(actualNameList, ", "),
+		table.concat(expectedNameList, ", "),
+		masterSelected and "yes" or "no",
+		tostring(activePath)
+	)
+	if #issues > 0 then
+		return nil, state .. "\n\nSelection/configuration problems:\n- " .. table.concat(issues, "\n- ")
+	end
+	return state
+end
+
 local function applyConfirmedRegionEdits(regions, selectedByCueId, nameOverrides)
 	local edits, changedRegions = {}, {}
 	for _, region in ipairs(regions) do
@@ -533,10 +616,10 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 			if not renderTable then
 				error(plan.pattern .. "\n  " .. tostring(buildError))
 			end
-			if renderTable.Source ~= 3 then
-				error(
-					"Expected selected-track stem source (Source=3), received Source=" .. tostring(renderTable.Source)
-				)
+			local renderState, stateError =
+				verifyRenderState(details.projectHandle, details.projectPath, busTracks, renderTable)
+			if not renderState then
+				error("Not rendering because the pre-render state is unexpected.\n\n" .. tostring(stateError))
 			end
 			local result = Render.renderProjectWithTable(ultraschallApi, renderTable)
 			if result.count < 0 then
@@ -558,7 +641,9 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 			if result.count > 0 and matchedStemFiles == 0 then
 				error(
 					"Ultraschall reported a render, but returned no file matching the expected selected-track stem pattern:\n"
-					.. plan.pattern
+						.. plan.pattern
+						.. "\n\n"
+						.. renderState
 						.. (
 							result.files
 								and #result.files > 0
@@ -626,8 +711,13 @@ local function main()
 		stop("Could not parse the Cue project filename.\n\n" .. tostring(parseError))
 		return
 	end
-	local _, projectPath = r.EnumProjects(-1)
-	local details = { prefix = parsed.prefix, cues = parsed.cues, projectPath = projectPath }
+	local projectHandle, projectPath = r.EnumProjects(-1)
+	local details = {
+		prefix = parsed.prefix,
+		cues = parsed.cues,
+		projectPath = projectPath,
+		projectHandle = projectHandle,
+	}
 	local busTracks, busError = collectBusTracks()
 	if not busTracks then
 		stop(busError)
