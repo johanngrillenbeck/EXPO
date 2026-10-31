@@ -94,3 +94,5 @@ Format: WAV
 bit depth: 24 bit PCM
 
 Save outfile.render_stats.html
+
+**Current pre-mix implementation note:** The native REAPER API path does not currently set the resampling algorithm or offline render speed, and it does not request per-file render-stat sidecars. See the [pre-mix STEM action notes]({% link Docs/included%20scripts/cue/render-pre-mix-stems.md %}) for the settings enforced by that action.

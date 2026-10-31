@@ -13,19 +13,20 @@ parent: Cue Scripts
 | Spec'd                  | ✅              |
 | Release version roadmap | v1             |
 | Implemented             | ✅              |
-| Depends on              | Ultraschall API, ReaImGui |
+| Depends on              | Ultraschall API (WAV format string only), ReaImGui |
 
 **Script Logic:**
 - Applies the Cue-project [render safety checks]({% link Docs/general%20info/render-safety-checks.md %}), including Cue/Assembly frame-rate matching and EXPO-region frame alignment.
 - For multicue projects, shows a checklist of matched regions; missing cues are reported and skipped.
 - Confirms and applies any region naming/frame-alignment changes as one undoable operation.
-- Renders each selected cue's Bus Tracks directly as selected-track stems (not via Master) to `03-01_Exports`. REAPER's "Do not render files that are likely silent" option omits silent bus outputs.
-- Uses 48 kHz, Master-channel-count output, full-speed offline rendering, project/hardware FX rate, r8brain free, and 24-bit PCM WAV. Saves per-file render statistics.
-- Does not overwrite or silently increment existing files. Existing exports for the same cue/version/stem block rendering.
+- Applies render settings through REAPER's native project API and invokes REAPER's built-in render action. The REAPER render-dialog test confirmed that `RENDER_SETTINGS=3` selects “Selected tracks (stems)” in this setup; the action sets and verifies that value before rendering. Each selected cue's Bus Tracks are rendered directly as selected-track stems (not via Master) to `03-01_Exports`. REAPER's "Do not render files that are likely silent" option omits silent bus outputs.
+- Uses 48 kHz, Master-channel-count output, custom frame-aligned bounds, and a 24-bit PCM WAV format string. Ultraschall is used only to construct the WAV format string; it does not apply or execute render tables.
+- REAPER's native project API does not expose all previous RenderTable options. This action does not explicitly set the resampling algorithm, offline render speed, or per-file render-stat sidecars; those options are not guaranteed by this implementation.
+- Does not overwrite or silently increment existing files. Any existing pre-mix file matching the same project prefix, cue, and version blocks rendering, including unexpected files from an earlier failed/misconfigured attempt.
 
 ## Filename construction
 
-The action combines Cue filename tokens with REAPER render wildcards:
+The action combines Cue filename tokens with REAPER render wildcards. It does not pre-validate REAPER's predicted render targets: REAPER may intentionally omit tracks it considers likely silent. EXPO reports the WAV files that REAPER actually creates and checks expected output paths for existing files before rendering.
 
 `[projectPrefix]_[cueId]_[version]_$track_pre-mix_TC-$starttc`
 

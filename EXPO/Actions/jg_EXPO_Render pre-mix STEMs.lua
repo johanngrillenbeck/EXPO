@@ -2,7 +2,7 @@
 -- @author Johann Grillenbeck
 -- @about
 --   # EXPO: Render pre-mix STEMs
---   Validates Cue regions, aligns them to frames and renders non-silent bus-track stems via Ultraschall.
+--   Validates Cue regions, aligns them to frames and renders non-silent bus-track stems via REAPER.
 -- @links
 --   GitHub https://github.com/johanngrillenbeck/EXPO
 -- @noindex
@@ -25,62 +25,6 @@ local PREMIX_RENDER_STRING = {
 	embedProjectTempo = false,
 }
 
--- Ultraschall 5.3 RenderTable reference and pre-mix-specific overrides.
--- Commented entries document API defaults; CreateNewRenderTable supplies them unless overridden.
--- Bounds/source/paths are action-specific; position, directory, pattern, channels and WAV string are set dynamically.
-local PREMIX_RENDER_TABLE = {
-	AddToProj = false, -- boolean; do not add rendered items to new tracks (factory default false)
-	-- Brickwall_Limiter_Enabled = false, -- boolean; limiter enabled (factory default false)
-	-- Brickwall_Limiter_Method = 1, -- integer; 1 peak, 2 true peak (factory default 1)
-	-- Brickwall_Limiter_Target = 1, -- number; limiter target in dB (factory default 1)
-	Source = 3, -- integer; 3 selected-track stems (not via Master)
-	ParallelRender = true, -- boolean; REAPER enables parallel rendering for selected-track stem source
-	Bounds = 0, -- integer; 0 custom range
-	-- Startposition = 0, -- number; custom range start in seconds (set dynamically per cue)
-	-- Endposition = 0, -- number; custom range end in seconds (set dynamically per cue)
-	-- TailFlag = 18, -- integer bitmask: 1 custom, 2 project, 4 time selection, 8 all regions, 16 selected items, 32 selected regions, 64 razor areas (factory default 18)
-	-- TailMS = 0, -- integer; tail length in milliseconds (factory default 0)
-	-- RenderFile = "", -- string; output directory (factory default empty; set dynamically)
-	-- RenderPattern = "", -- string; filename pattern (factory default empty; set dynamically; includes REAPER $track and $starttc wildcards)
-	CloseAfterRender = true, -- boolean; close render dialog when done (factory default true)
-	SampleRate = 48000, -- integer; sample rate in Hz (pre-mix convention; factory default 44100)
-	-- Channels = 2, -- integer; output channel count (factory default 2; set dynamically to Master channel count)
-	OfflineOnlineRendering = 0, -- integer; 0 full-speed offline (factory default 0)
-	-- ProjectSampleRateFXProcessing = true, -- boolean; process FX at project/hardware rate (factory default true)
-	RenderResample = 10, -- integer; 10 r8brain free (pre-mix convention; factory default 3)
-	-- OnlyMonoMedia = false, -- boolean; mono-only media to mono files (factory default false)
-	-- MultiChannelFiles = false, -- boolean; multichannel tracks to multichannel files (factory default false)
-	-- Dither = 0, -- integer bitmask: 1 master dither, 2 master noise shaping, 4 stem dither, 8 stem noise shaping (factory default 0)
-	-- RenderString = "", -- string; Base64 render-format config (factory default empty; set from WAV builder)
-	SilentlyIncrementFilename = false, -- boolean; do not silently increment conflicting names (factory default true)
-	-- SaveCopyOfProject = false, -- boolean; save RPP copy alongside render (factory default false)
-	-- RenderQueueDelay = false, -- boolean; delay queued renders (factory default false)
-	-- RenderQueueDelaySeconds = 0, -- integer; queued render delay seconds (factory default 0)
-	-- EmbedStretchMarkers = false, -- boolean; embed stretch markers/transient guides (factory default false)
-	-- RenderString2 = "", -- string; secondary-format Base64 render config (factory default empty)
-	-- EmbedTakeMarkers = false, -- boolean; embed take markers (factory default false)
-	NoSilentRender = true, -- boolean; skip likely-silent outputs (pre-mix requirement; factory default false)
-	-- EmbedMetaData = false, -- boolean; embed metadata (factory default false)
-	-- Enable2ndPassRender = false, -- boolean; enable second pass (factory default false)
-	-- Normalize_Enabled = false, -- boolean; enable normalization (factory default false)
-	-- Normalize_Method = 0, -- integer; 0 LUFS-I, 1 RMS-I, 2 peak, 3 true peak, 4 LUFS-M max, 5 LUFS-S max (factory default 0)
-	-- Normalize_Stems_to_Master_Target = false, -- boolean; common master target for stems vs per-file (factory default false)
-	-- Normalize_Target = -24, -- number; normalization target dB (factory default -24)
-	-- FadeIn_Enabled = false, -- boolean; apply render fade-in (factory default false)
-	-- FadeIn = 0, -- number; fade-in seconds (factory default 0)
-	-- FadeIn_Shape = 0, -- integer; 0 linear, 1 inverted quadratic, 2 quadratic, 3 inverted quartic, 4 quartic, 5 cosine S, 6 quartic S (factory default 0)
-	-- FadeOut_Enabled = false, -- boolean; apply render fade-out (factory default false)
-	-- FadeOut = 0, -- number; fade-out seconds (factory default 0)
-	-- FadeOut_Shape = false, -- integer; factory default false
-	-- OnlyChannelsSentToParent = false, -- boolean; render only channels sent to parent (factory default false)
-	-- RenderStems_Prefader = false, -- boolean; render stems pre-fader (factory default false)
-	-- Preserve_Start_Offset = false, -- boolean; preserve selected-media-item start offset (factory default false)
-	-- Preserve_Metadata = false, -- boolean; preserve selected-media-item metadata (factory default false)
-	-- RenderTable = true, -- boolean; valid-table marker (CreateNewRenderTable sets true)
-	-- ReturnToDialog = false, -- boolean; return to render dialog after rendering (factory default false)
-	SaveRenderStatsFile = 2, -- integer; 0 none, 1 combined, 2 per rendered file (pre-mix convention)
-}
-
 local function loadGlobal(fileName)
 	local source = debug.getinfo(1, "S").source:match("^@(.+)$") or ""
 	local actionDir = source:match("^(.*)[/\\]") or ""
@@ -96,8 +40,7 @@ end
 
 local H = loadGlobal("jg_EXPO_Helper.lua")
 local Messages = loadGlobal("jg_EXPO_Messages.lua")
-local Render = loadGlobal("jg_EXPO_Render.lua")
-if not (H and Messages and Render) then
+if not (H and Messages) then
 	return
 end
 
@@ -232,6 +175,36 @@ local function createPremixRenderString(ultraschallApi)
 	return renderString
 end
 
+local function loadUltraschallWavBuilder()
+	local api = rawget(_G, "ultraschall")
+	if type(api) == "table" and type(api.CreateRenderCFG_WAV) == "function" then
+		return api
+	end
+
+	local apiPath = r.GetResourcePath() .. "/UserPlugins/ultraschall_api.lua"
+	if not r.file_exists(apiPath) then
+		return nil, "Ultraschall API file was not found at:\n" .. apiPath
+	end
+	local ok, returnedApi = pcall(dofile, apiPath)
+	if not ok then
+		return nil, "Could not load Ultraschall API from:\n" .. apiPath .. "\n\n" .. tostring(returnedApi)
+	end
+	api = rawget(_G, "ultraschall")
+	if
+		(type(api) ~= "table" or type(api.CreateRenderCFG_WAV) ~= "function")
+		and type(returnedApi) == "table"
+		and type(returnedApi.CreateRenderCFG_WAV) == "function"
+	then
+		api = returnedApi
+		rawset(_G, "ultraschall", api)
+	end
+	if type(api) ~= "table" or type(api.CreateRenderCFG_WAV) ~= "function" then
+		return nil,
+			"Ultraschall API loaded, but CreateRenderCFG_WAV is unavailable. Check the installation at:\n" .. apiPath
+	end
+	return api
+end
+
 local function collectBusTracks()
 	local tracks, names = {}, {}
 	local windows = r.GetOS():match("Win") ~= nil
@@ -281,7 +254,7 @@ local function normalizedPath(path)
 	return key
 end
 
-local function findStemConflicts(directory, prefix, cue, stemTokens)
+local function findStemConflicts(directory, prefix, cue)
 	local matches = {}
 	local index = 0
 	while true do
@@ -295,7 +268,6 @@ local function findStemConflicts(directory, prefix, cue, stemTokens)
 			and normalizedPath(parsed.prefix) == normalizedPath(prefix)
 			and parsed.cueId == cue.cueId
 			and parsed.normalizedVersion == cue.normalizedVersion
-			and stemTokens[normalizedPath(parsed.stem)]
 		then
 			table.insert(matches, directory .. "/" .. fileName)
 		end
@@ -304,18 +276,270 @@ local function findStemConflicts(directory, prefix, cue, stemTokens)
 	return matches
 end
 
-local function buildRenderTable(ultraschallApi, renderString, outputFolder, region, channels, pattern)
-	local overrides = {}
-	for key, value in pairs(PREMIX_RENDER_TABLE) do
-		overrides[key] = value
+local NATIVE_RENDER_ACTION_ID = 41824 -- File: Render project, using most recent render settings
+
+local NATIVE_RENDER_NUMBER_KEYS = {
+	"RENDER_SETTINGS",
+	"RENDER_BOUNDSFLAG",
+	"RENDER_CHANNELS",
+	"RENDER_SRATE",
+	"RENDER_STARTPOS",
+	"RENDER_ENDPOS",
+	"RENDER_TAILFLAG",
+	"RENDER_TAILMS",
+	"RENDER_ADDTOPROJ",
+	"RENDER_DITHER",
+	"RENDER_NORMALIZE",
+}
+
+local NATIVE_RENDER_STRING_KEYS = {
+	"RENDER_FILE",
+	"RENDER_PATTERN",
+	"RENDER_FORMAT",
+	"RENDER_FORMAT2",
+}
+
+local function snapshotNativeRenderSettings(project)
+	local state = { active = true, project = project, numbers = {}, strings = {} }
+	state.dirty = r.GetSetProjectInfo(project, "DIRTY", 0, false)
+	if type(state.dirty) ~= "number" then
+		return nil, "Could not read the Cue project's current dirty state."
 	end
-	overrides.Startposition = region.alignedStart
-	overrides.Endposition = region.alignedEnd
-	overrides.RenderFile = outputFolder:gsub("[/\\]+$", "") .. "/"
-	overrides.RenderPattern = pattern
-	overrides.Channels = channels
-	overrides.RenderString = renderString
-	return Render.createRenderTable(ultraschallApi, overrides)
+	for _, key in ipairs(NATIVE_RENDER_NUMBER_KEYS) do
+		local ok, value = pcall(r.GetSetProjectInfo, project, key, 0, false)
+		if not ok or type(value) ~= "number" then
+			return nil, "Could not read the current REAPER render setting " .. key .. "."
+		end
+		state.numbers[key] = value
+	end
+	for _, key in ipairs(NATIVE_RENDER_STRING_KEYS) do
+		local ok, retval, value = pcall(r.GetSetProjectInfo_String, project, key, "", false)
+		if not ok or not retval or type(value) ~= "string" then
+			return nil, "Could not read the current REAPER render setting " .. key .. "."
+		end
+		state.strings[key] = value
+	end
+	return state
+end
+
+local function restoreNativeRenderSettings(state, restoreDirty)
+	if not state or not state.active then
+		return true, nil
+	end
+	local errors = {}
+	for _, key in ipairs(NATIVE_RENDER_STRING_KEYS) do
+		local ok, retval = pcall(r.GetSetProjectInfo_String, state.project, key, state.strings[key], true)
+		if not ok or not retval then
+			table.insert(errors, "Could not restore REAPER render setting " .. key .. ".")
+		end
+	end
+	for _, key in ipairs(NATIVE_RENDER_NUMBER_KEYS) do
+		local ok, value = pcall(r.GetSetProjectInfo, state.project, key, state.numbers[key], true)
+		if not ok or type(value) ~= "number" or math.abs(value - state.numbers[key]) > 1e-7 then
+			table.insert(errors, "Could not restore REAPER render setting " .. key .. ".")
+		end
+	end
+	if restoreDirty ~= false then
+		local dirtyOk, dirtyValue = pcall(r.GetSetProjectInfo, state.project, "DIRTY", state.dirty, true)
+		if not dirtyOk or type(dirtyValue) ~= "number" or dirtyValue ~= state.dirty then
+			table.insert(errors, "Could not restore the Cue project's previous dirty state.")
+		end
+	end
+	if #errors == 0 then
+		state.active = false
+		return true, nil
+	end
+	return false, table.concat(errors, "\n")
+end
+
+local function setNativeRenderNumber(project, key, value)
+	local ok, returnedValue = pcall(r.GetSetProjectInfo, project, key, value, true)
+	if not ok or type(returnedValue) ~= "number" then
+		return false, "Could not set REAPER render setting " .. key .. "."
+	end
+	local readOk, actualValue = pcall(r.GetSetProjectInfo, project, key, 0, false)
+	if not readOk or type(actualValue) ~= "number" or math.abs(actualValue - value) > 1e-7 then
+		return false,
+			"REAPER did not retain render setting " .. key .. ": expected " .. tostring(value) .. ", got " .. tostring(
+				actualValue
+			)
+	end
+	return true
+end
+
+local function setNativeRenderString(project, key, value)
+	local ok, retval = pcall(r.GetSetProjectInfo_String, project, key, value, true)
+	if not ok or not retval then
+		return false, "Could not set REAPER render setting " .. key .. "."
+	end
+	local readOk, getOk, actualValue = pcall(r.GetSetProjectInfo_String, project, key, "", false)
+	if not readOk or not getOk or actualValue ~= value then
+		return false, "REAPER did not retain render setting " .. key .. "."
+	end
+	return true
+end
+
+local function applyNativeRenderSettings(project, renderString, cueSettings)
+	local numberSettings = {
+		{ "RENDER_SETTINGS", 3 }, -- REAPER test dialog confirms selected-track stems
+		{ "RENDER_BOUNDSFLAG", 0 }, -- custom start/end bounds
+		{ "RENDER_CHANNELS", cueSettings.channels },
+		{ "RENDER_SRATE", 48000 },
+		{ "RENDER_STARTPOS", cueSettings.region.alignedStart },
+		{ "RENDER_ENDPOS", cueSettings.region.alignedEnd },
+		{ "RENDER_TAILFLAG", 0 },
+		{ "RENDER_TAILMS", 0 },
+		{ "RENDER_ADDTOPROJ", 2 }, -- do not add to project; skip files likely to be silent
+		{ "RENDER_DITHER", 0 },
+		{ "RENDER_NORMALIZE", 0 },
+	}
+	local stringSettings = {
+		RENDER_FILE = cueSettings.outputFolder:gsub("[/\\]+$", ""),
+		RENDER_PATTERN = cueSettings.pattern,
+		RENDER_FORMAT = renderString,
+		RENDER_FORMAT2 = "",
+	}
+	for _, setting in ipairs(numberSettings) do
+		local ok, err = setNativeRenderNumber(project, setting[1], setting[2])
+		if not ok then
+			return false, err
+		end
+	end
+	for key, value in pairs(stringSettings) do
+		local ok, err = setNativeRenderString(project, key, value)
+		if not ok then
+			return false, err
+		end
+	end
+	return true
+end
+
+local function verifyRenderState(projectHandle, busTracks, cueSettings)
+	local issues = {}
+	local activeProject, activePath = r.EnumProjects(-1)
+	if projectHandle and activeProject ~= projectHandle then
+		table.insert(
+			issues,
+			"The active project changed before rendering. Expected Cue project:\n"
+				.. tostring(cueSettings.projectPath)
+				.. "\nActive project:\n"
+				.. tostring(activePath)
+		)
+	end
+	local expectedNumbers = {
+		RENDER_SETTINGS = 3,
+		RENDER_BOUNDSFLAG = 0,
+		RENDER_CHANNELS = cueSettings.channels,
+		RENDER_SRATE = 48000,
+		RENDER_STARTPOS = cueSettings.region.alignedStart,
+		RENDER_ENDPOS = cueSettings.region.alignedEnd,
+		RENDER_ADDTOPROJ = 2,
+	}
+	for key, expected in pairs(expectedNumbers) do
+		local actual = r.GetSetProjectInfo(projectHandle, key, 0, false)
+		if math.abs(actual - expected) > 1e-7 then
+			table.insert(issues, key .. " is " .. tostring(actual) .. "; expected " .. tostring(expected) .. ".")
+		end
+	end
+	local expectedStrings = {
+		RENDER_FILE = cueSettings.outputFolder:gsub("[/\\]+$", ""),
+		RENDER_PATTERN = cueSettings.pattern,
+		RENDER_FORMAT = cueSettings.renderString,
+		RENDER_FORMAT2 = "",
+	}
+	for key, expected in pairs(expectedStrings) do
+		local _, actual = r.GetSetProjectInfo_String(projectHandle, key, "", false)
+		if actual ~= expected then
+			table.insert(
+				issues,
+				key .. " was not retained: expected '" .. expected .. "', found '" .. tostring(actual) .. "'."
+			)
+		end
+	end
+
+	local expected = {}
+	local expectedNames, actualNames = {}, {}
+	for _, bus in ipairs(busTracks) do
+		expected[bus.track] = true
+		table.insert(expectedNames, bus.stem)
+	end
+	local actual = {}
+	for index = 0, r.CountSelectedTracks(0) - 1 do
+		local track = r.GetSelectedTrack(0, index)
+		local _, name = r.GetTrackName(track)
+		actual[track] = true
+		table.insert(actualNames, name)
+		if not expected[track] then
+			table.insert(issues, "Unexpected selected track at render time: " .. tostring(name))
+		end
+	end
+	for _, bus in ipairs(busTracks) do
+		if not actual[bus.track] then
+			table.insert(issues, "Bus track is not selected at render time: " .. bus.stem)
+		end
+		local _, name = r.GetTrackName(bus.track)
+		if name ~= bus.stem then
+			table.insert(
+				issues,
+				"Bus track name is not normalized for $track: expected '"
+					.. bus.stem
+					.. "', found '"
+					.. tostring(name)
+					.. "'."
+			)
+		end
+	end
+	local masterSelected = false
+	if type(r.CountSelectedTracks2) == "function" and type(r.GetSelectedTrack2) == "function" then
+		for index = 0, r.CountSelectedTracks2(0, true) - 1 do
+			if r.GetSelectedTrack2(0, index, true) == r.GetMasterTrack(0) then
+				masterSelected = true
+				table.insert(issues, "The Master track is selected at render time.")
+			end
+		end
+	end
+	local state = string.format(
+		"Render preflight: RENDER_SETTINGS=%s; selected tracks=%d/%d [%s]; expected buses=[%s]; Master selected=%s; active project=%s",
+		tostring(r.GetSetProjectInfo(projectHandle, "RENDER_SETTINGS", 0, false)),
+		r.CountSelectedTracks(0),
+		#busTracks,
+		table.concat(actualNames, ", "),
+		table.concat(expectedNames, ", "),
+		masterSelected and "yes" or "no",
+		tostring(activePath)
+	)
+	if #issues > 0 then
+		return nil, state .. "\n\nSelection/configuration problems:\n- " .. table.concat(issues, "\n- ")
+	end
+	return state
+end
+
+local function snapshotDirectoryFiles(directory)
+	local files, index = {}, 0
+	while true do
+		local fileName = r.EnumerateFiles(directory, index)
+		if not fileName then
+			break
+		end
+		files[normalizedPath(fileName)] = true
+		index = index + 1
+	end
+	return files
+end
+
+local function collectNewWaveFiles(directory, before)
+	local files, index = {}, 0
+	while true do
+		local fileName = r.EnumerateFiles(directory, index)
+		if not fileName then
+			break
+		end
+		if fileName:lower():match("%.wav$") and not before[normalizedPath(fileName)] then
+			table.insert(files, directory:gsub("[/\\]+$", "") .. "/" .. fileName)
+		end
+		index = index + 1
+	end
+	return files
 end
 
 local function snapshotTrackState(busTracks)
@@ -378,88 +602,6 @@ local function prepareTracksForRender(state)
 	r.TrackList_AdjustWindows(false)
 	r.UpdateArrange()
 	return ok, err
-end
-
-local function verifyRenderState(projectHandle, projectPath, busTracks, renderTable)
-	local issues = {}
-	if renderTable.Source ~= 3 then
-		table.insert(
-			issues,
-			"RenderTable.Source is " .. tostring(renderTable.Source) .. "; expected 3 (selected-track stems)."
-		)
-	end
-
-	local activeProject, activePath = r.EnumProjects(-1)
-	if projectHandle and activeProject ~= projectHandle then
-		table.insert(
-			issues,
-			"The active project changed before rendering. Expected Cue project:\n"
-				.. tostring(projectPath)
-				.. "\nActive project:\n"
-				.. tostring(activePath)
-		)
-	end
-
-	local expected = {}
-	local expectedNames = {}
-	local expectedNameList = {}
-	for _, bus in ipairs(busTracks) do
-		expected[bus.track] = true
-		expectedNames[bus.track] = bus.stem
-		table.insert(expectedNameList, bus.stem)
-	end
-	local actual = {}
-	local actualNameList = {}
-	for index = 0, r.CountSelectedTracks(0) - 1 do
-		local track = r.GetSelectedTrack(0, index)
-		local _, name = r.GetTrackName(track)
-		actual[track] = true
-		table.insert(actualNameList, name)
-		if not expected[track] then
-			table.insert(issues, "Unexpected selected track at render time: " .. tostring(name))
-		end
-	end
-	local masterSelected = false
-	if type(r.CountSelectedTracks2) == "function" and type(r.GetSelectedTrack2) == "function" then
-		for index = 0, r.CountSelectedTracks2(0, true) - 1 do
-			local track = r.GetSelectedTrack2(0, index, true)
-			if track == r.GetMasterTrack(0) then
-				masterSelected = true
-				table.insert(issues, "The Master track is selected at render time.")
-			end
-		end
-	end
-	for _, bus in ipairs(busTracks) do
-		if not actual[bus.track] then
-			table.insert(issues, "Bus track is not selected at render time: " .. bus.stem)
-		end
-		local _, name = r.GetTrackName(bus.track)
-		if name ~= expectedNames[bus.track] then
-			table.insert(
-				issues,
-				"Bus track name was not temporarily normalized for $track: expected '"
-					.. expectedNames[bus.track]
-					.. "', found '"
-					.. tostring(name)
-					.. "'."
-			)
-		end
-	end
-
-	local state = string.format(
-		"Render preflight: Source=%s; selected tracks=%d/%d [%s]; expected buses=[%s]; Master selected=%s; active project=%s",
-		tostring(renderTable.Source),
-		r.CountSelectedTracks(0),
-		#busTracks,
-		table.concat(actualNameList, ", "),
-		table.concat(expectedNameList, ", "),
-		masterSelected and "yes" or "no",
-		tostring(activePath)
-	)
-	if #issues > 0 then
-		return nil, state .. "\n\nSelection/configuration problems:\n- " .. table.concat(issues, "\n- ")
-	end
-	return state
 end
 
 local function applyConfirmedRegionEdits(regions, selectedByCueId, nameOverrides)
@@ -530,13 +672,8 @@ local function applyConfirmedRegionEdits(regions, selectedByCueId, nameOverrides
 	return true
 end
 
-local function runRender(details, regions, selectedRegions, nameOverrides, ultraschallApi, renderString, busTracks)
+local function runRender(details, regions, selectedRegions, nameOverrides, renderString, busTracks)
 	local outputFolder = H.getExpoRoot(details.projectPath) .. "/03_Cues/03-01_Exports"
-	local stemTokens = {}
-	for _, bus in ipairs(busTracks) do
-		local key = normalizedPath(bus.stem)
-		stemTokens[key] = true
-	end
 
 	local plans, conflicts, conflictSet = {}, {}, {}
 	local function addConflict(path)
@@ -555,7 +692,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 	end)
 	for _, region in ipairs(selectedRegions) do
 		local cue = region.cue
-		for _, existing in ipairs(findStemConflicts(outputFolder, details.prefix, cue, stemTokens)) do
+		for _, existing in ipairs(findStemConflicts(outputFolder, details.prefix, cue)) do
 			addConflict(existing)
 		end
 		local expected = {}
@@ -582,7 +719,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 	end
 	if #conflicts > 0 then
 		stop(
-			"Pre-mix STEM files already exist for this cue/version. EXPO will not overwrite or increment versioned files.\n\n"
+			"Pre-mix files already exist for this cue/version. EXPO will not overwrite or increment versioned files.\n\n"
 				.. table.concat(conflicts, "\n")
 				.. "\n\nSave the Cue Project with a new version index or remove the existing pre-mix STEM files manually."
 		)
@@ -599,67 +736,89 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 		return
 	end
 
+	local renderSettingsState, settingsError = snapshotNativeRenderSettings(details.projectHandle)
+	if not renderSettingsState then
+		stop(
+			"Could not snapshot the current REAPER render settings. No render was started.\n\n"
+				.. tostring(settingsError)
+		)
+		return
+	end
 	local state = snapshotTrackState(busTracks)
 	local restoreOk, restoreError
 	r.atexit(function()
-		restoreTrackState(state)
+		local tracksRestored = restoreTrackState(state)
+		restoreNativeRenderSettings(renderSettingsState, tracksRestored)
 	end)
-	local rendered, failed, unexpected = {}, {}, {}
+	local rendered, failed, unexpected, silentCues = {}, {}, {}, {}
 	local ok, err = xpcall(function()
 		local prepared, prepareError = prepareTracksForRender(state)
 		if not prepared then
 			error(prepareError)
 		end
 		for _, plan in ipairs(plans) do
-			local renderTable, buildError =
-				buildRenderTable(ultraschallApi, renderString, outputFolder, plan.region, channels, plan.pattern)
-			if not renderTable then
-				error(plan.pattern .. "\n  " .. tostring(buildError))
+			local configured, configureError = applyNativeRenderSettings(details.projectHandle, renderString, {
+				outputFolder = outputFolder,
+				region = plan.region,
+				channels = channels,
+				pattern = plan.pattern,
+				renderString = renderString,
+			})
+			if not configured then
+				error(plan.pattern .. "\n  " .. tostring(configureError))
 			end
-			local renderState, stateError =
-				verifyRenderState(details.projectHandle, details.projectPath, busTracks, renderTable)
+			local renderState, stateError = verifyRenderState(details.projectHandle, busTracks, {
+				projectPath = details.projectPath,
+				region = plan.region,
+				channels = channels,
+				pattern = plan.pattern,
+				renderString = renderString,
+				outputFolder = outputFolder,
+			})
 			if not renderState then
 				error("Not rendering because the pre-render state is unexpected.\n\n" .. tostring(stateError))
 			end
-			local result = Render.renderProjectWithTable(ultraschallApi, renderTable)
-			if result.count < 0 then
-				error(plan.pattern .. "\n  " .. tostring(result.detail))
+			local filesBefore = snapshotDirectoryFiles(outputFolder)
+			local renderOk, renderError = pcall(r.Main_OnCommand, NATIVE_RENDER_ACTION_ID, 0)
+			if not renderOk then
+				error(
+					"REAPER's native render action failed for pattern " .. plan.pattern .. ": " .. tostring(renderError)
+				)
 			end
 			local matchedStemFiles = 0
-			for _, file in ipairs(result.files or {}) do
-				local path = tostring(file)
+			for _, path in ipairs(collectNewWaveFiles(outputFolder, filesBefore)) do
 				local fileName = path:gsub("\\", "/"):match("([^/]+)$") or path
-				if fileName:lower():match("%.wav$") then
-					table.insert(rendered, path)
-					if plan.expected[normalizedPath(fileName)] then
-						matchedStemFiles = matchedStemFiles + 1
-					else
-						table.insert(unexpected, path)
-					end
+				table.insert(rendered, path)
+				if plan.expected[normalizedPath(fileName)] then
+					matchedStemFiles = matchedStemFiles + 1
+				else
+					table.insert(unexpected, path)
 				end
 			end
-			if result.count > 0 and matchedStemFiles == 0 then
-				error(
-					"Ultraschall reported a render, but returned no file matching the expected selected-track stem pattern:\n"
-						.. plan.pattern
-						.. "\n\n"
-						.. renderState
-						.. (
-							result.files
-								and #result.files > 0
-								and ("\n\nReturned paths:\n" .. table.concat(result.files, "\n"))
-							or ""
-						)
+			if matchedStemFiles == 0 then
+				table.insert(
+					silentCues,
+					plan.cue.cueId
+						.. "_"
+						.. plan.cue.version
+						.. " (no new WAVs; render may have been cancelled or all stems may be silent)"
 				)
 			end
 		end
 	end, debug.traceback)
 	restoreOk, restoreError = restoreTrackState(state)
+	local settingsRestoreOk, settingsRestoreError = restoreNativeRenderSettings(renderSettingsState, restoreOk)
 	if not ok then
 		table.insert(failed, tostring(err))
 	end
 	if not restoreOk then
 		table.insert(failed, "Could not restore temporary bus track names/selection:\n" .. tostring(restoreError))
+	end
+	if not settingsRestoreOk then
+		table.insert(
+			failed,
+			"Could not restore the original REAPER render settings:\n" .. tostring(settingsRestoreError)
+		)
 	end
 
 	local summary = {}
@@ -681,6 +840,9 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 				.. table.concat(unexpected, "\n")
 		)
 	end
+	if #silentCues > 0 then
+		table.insert(summary, "Cues with no new WAV output:\n" .. table.concat(silentCues, "\n"))
+	end
 	if #failed > 0 then
 		table.insert(summary, "Errors:\n" .. table.concat(failed, "\n\n"))
 	end
@@ -688,7 +850,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, ultra
 end
 
 local function main()
-	local ultraschallApi, apiError = Render.loadUltraschall()
+	local ultraschallApi, apiError = loadUltraschallWavBuilder()
 	if not ultraschallApi then
 		stop(
 			"Ultraschall API could not be loaded. Install it via ReaPack or check the installation, then run this action again.\n\n"
@@ -825,7 +987,7 @@ local function main()
 		if not selectedRegions or #selectedRegions == 0 then
 			return
 		end
-		runRender(details, regions, selectedRegions, renameOverrides, ultraschallApi, renderString, busTracks)
+		runRender(details, regions, selectedRegions, renameOverrides, renderString, busTracks)
 	end
 	if #details.cues > 1 then
 		showCueChecklist(matching.matched, matching.missing, afterSelection)
