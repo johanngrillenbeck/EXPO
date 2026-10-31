@@ -1024,13 +1024,12 @@ end
 
 ---Collects regions assigned to a named ruler lane (not ordinary timeline regions).
 ---@param laneName string
----@param project ReaProject|nil
+---@param project number
 ---@return table[] regions
 function H.getRegionsOnRulerLane(laneName, project)
-	project = project or 0
 	local lane = H.getRulerLane(laneName)
 	if not lane then
-		return {}, nil
+		return {}
 	end
 
 	local regions = {}
@@ -1060,7 +1059,7 @@ function H.getRegionsOnRulerLane(laneName, project)
 		end
 		return a.startPos < b.startPos
 	end)
-	return regions, lane
+	return regions
 end
 
 ---Calculates outward frame alignment without mutating the project: start rounds earlier, end rounds later.
