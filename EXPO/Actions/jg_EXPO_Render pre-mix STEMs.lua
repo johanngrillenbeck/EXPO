@@ -13,6 +13,7 @@ local MB_OK = 0
 local MB_OKCANCEL = 1
 local MB_RESULT_OK = 1
 local UNSELECT_ALL_TRACKS_COMMAND_ID = 40297
+local RENDER_RESAMPLE_MODE = 10 -- r8brain free, set through SWS projrenderresample
 
 -- Ultraschall 5.3 WAV render-string configuration.
 -- CreateRenderCFG_WAV: BitDepth 2 = 24-bit PCM; LargeFiles 0 = Auto WAV/Wave64;
@@ -225,6 +226,10 @@ local function normalizedPath(path)
 	return key
 end
 
+local function displayFileName(path)
+	return tostring(path or ""):gsub("\\", "/"):match("([^/]+)$") or tostring(path or "")
+end
+
 local function findStemConflicts(directory, prefix, cue)
 	local matches = {}
 	local index = 0
@@ -246,8 +251,6 @@ local function findStemConflicts(directory, prefix, cue)
 	end
 	return matches
 end
-
-local NATIVE_RENDER_ACTION_ID = 41824 -- File: Render project, using most recent render settings
 
 local function applyNativeRenderSettings(project, renderString, cueSettings)
 	local numberSettings = {
@@ -510,7 +513,7 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 		local key = normalizedPath(path)
 		if not conflictSet[key] then
 			conflictSet[key] = true
-			table.insert(conflicts, path)
+			table.insert(conflicts, displayFileName(path))
 		end
 	end
 	local selectedByCueId = {}
@@ -608,8 +611,12 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 			if not renderState then
 				error("Not rendering because the pre-render state is unexpected.\n\n" .. tostring(stateError))
 			end
+			local resampleOk, resampleError = Render.setRenderResampleMode(RENDER_RESAMPLE_MODE)
+			if not resampleOk then
+				error(plan.pattern .. "\n  " .. tostring(resampleError))
+			end
 			local filesBefore = Render.snapshotDirectoryFiles(outputFolder)
-			local renderOk, renderError = pcall(r.Main_OnCommand, NATIVE_RENDER_ACTION_ID, 0)
+			local renderOk, renderError = pcall(r.Main_OnCommand, Render.NATIVE_RENDER_ACTION_ID, 0)
 			if not renderOk then
 				error(
 					"REAPER's native render action failed for pattern " .. plan.pattern .. ": " .. tostring(renderError)
@@ -618,11 +625,11 @@ local function runRender(details, regions, selectedRegions, nameOverrides, rende
 			local matchedStemFiles = 0
 			for _, path in ipairs(Render.collectNewFiles(outputFolder, filesBefore, "wav")) do
 				local fileName = path:gsub("\\", "/"):match("([^/]+)$") or path
-				table.insert(rendered, path)
+				table.insert(rendered, fileName)
 				if plan.expected[normalizedPath(fileName)] then
 					matchedStemFiles = matchedStemFiles + 1
 				else
-					table.insert(unexpected, path)
+					table.insert(unexpected, fileName)
 				end
 			end
 			if matchedStemFiles == 0 then

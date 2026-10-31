@@ -12,6 +12,7 @@ local TITLE = "EXPO - Render preview audio"
 local MB_OK = 0
 local MB_OKCANCEL = 1
 local MB_RESULT_OK = 1
+local RENDER_RESAMPLE_MODE = 10 -- r8brain free, set through SWS projrenderresample
 
 -- Ultraschall 5.3 render-string arguments. The bitrate index is 16 = 320 kbps;
 -- encoder quality 2 = Normal. Optional flags default to false.
@@ -177,14 +178,16 @@ local function createPreviewRenderString(ultraschallApi)
 	return renderString
 end
 
-local NATIVE_RENDER_ACTION_ID = 41824 -- File: Render project, using most recent render settings
-
 local function normalizedFileName(fileName)
 	local key = tostring(fileName or ""):gsub("\\", "/")
 	if r.GetOS():match("Win") then
 		key = key:lower()
 	end
 	return key
+end
+
+local function displayFileName(path)
+	return tostring(path or ""):gsub("\\", "/"):match("([^/]+)$") or tostring(path or "")
 end
 
 local function configurePreviewRender(project, outputFolder, renderString, plan)
@@ -245,7 +248,7 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, rende
 		end
 		if not conflictSet[key] then
 			conflictSet[key] = true
-			table.insert(conflicts, path)
+			table.insert(conflicts, displayFileName(path))
 		end
 	end
 	local selectedRegions = {}
@@ -269,7 +272,13 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, rende
 		if r.file_exists(outputPath) then
 			addConflict(outputPath)
 		end
-		table.insert(outputPlans, { region = region, cue = cue, stem = stem, outputPath = outputPath })
+		table.insert(outputPlans, {
+			region = region,
+			cue = cue,
+			stem = stem,
+			fileName = stem .. ".mp3",
+			outputPath = outputPath,
+		})
 	end
 	if #conflicts > 0 then
 		stop(
@@ -379,7 +388,7 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, rende
 			local numbers, strings, configured, configureError =
 				configurePreviewRender(details.projectHandle, outputFolder, renderString, plan)
 			if not configured then
-				error(plan.outputPath .. "\n  " .. tostring(configureError))
+				error(plan.fileName .. "\n  " .. tostring(configureError))
 			end
 			local verified, verifyError =
 				verifyPreviewRenderState(details.projectHandle, details.projectPath, numbers, strings)
@@ -387,29 +396,33 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, rende
 				error("Not rendering because the pre-render state is unexpected.\n\n" .. tostring(verifyError))
 			end
 
+			local resampleOk, resampleError = Render.setRenderResampleMode(RENDER_RESAMPLE_MODE)
+			if not resampleOk then
+				error(plan.fileName .. "\n  " .. tostring(resampleError))
+			end
+
 			local filesBefore = Render.snapshotDirectoryFiles(outputFolder)
-			local renderOk, renderError = pcall(r.Main_OnCommand, NATIVE_RENDER_ACTION_ID, 0)
+			local renderOk, renderError = pcall(r.Main_OnCommand, Render.NATIVE_RENDER_ACTION_ID, 0)
 			if not renderOk then
 				error("REAPER's native render action failed: " .. tostring(renderError))
 			end
 
 			local newMp3Files = Render.collectNewFiles(outputFolder, filesBefore, "mp3")
-			local expectedName = plan.outputPath:gsub("^.*[/\\]", "")
-			local expectedKey = normalizedFileName(expectedName)
+			local expectedKey = normalizedFileName(plan.fileName)
 			local expectedCreated = false
 			for _, path in ipairs(newMp3Files) do
 				local fileName = path:gsub("\\", "/"):match("([^/]+)$") or path
 				if normalizedFileName(fileName) == expectedKey then
 					expectedCreated = true
-					table.insert(rendered, path)
+					table.insert(rendered, fileName)
 				else
-					table.insert(unexpected, path)
+					table.insert(unexpected, fileName)
 				end
 			end
 			if not expectedCreated then
 				error(
 					"The exact expected preview was not created (the render may have been cancelled or produced no audible output):\n"
-						.. plan.outputPath
+						.. plan.fileName
 				)
 			end
 			if #unexpected > 0 then

@@ -13,7 +13,7 @@ nav_order:
 
 **Only for MP3 previews**:
 If the master has more than two channels, requires confirmation that stereo fold-down has already been applied. Automatic temporary fold-down is deferred to v2.
-The preview action renders the master mix using REAPER's native render action, snapshots/restores native render settings and dirty state, and requires the exact expected MP3 to appear as a new file. Full-speed offline mode and r8brain resampling are not exposed through the native project render settings used here, so follow the user's REAPER render preferences.
+The preview action renders the master mix using REAPER's native render action, snapshots/restores native render settings and dirty state, and requires the exact expected MP3 to appear as a new file. Both native render actions use SWS `SNM_SetIntConfigVar("projrenderresample", 10)` to set r8brain free before rendering; this REAPER config preference remains set afterward. Full-speed offline mode is not exposed through the native project render settings used here.
 
 **For pre-mix Bus Track STEMs**:
 Pre-mix Bus Track STEMs are rendered directly from the selected tracks (not "via Master") with the channel count of the Master Channel. This is the Cue-project pre-mix exception to the six-channel convention for mixed STEMs and full mixes.

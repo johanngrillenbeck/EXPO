@@ -13,7 +13,7 @@ parent: Cue Scripts
 | Spec'd                  | ✅              |
 | Release version roadmap | v1             |
 | Implemented             | ✅              |
-| Depends on              | Ultraschall API (WAV format string only), ReaImGui |
+| Depends on              | Ultraschall API (WAV format string only), ReaImGui, SWS |
 
 **Script Logic:**
 - Applies the Cue-project [render safety checks]({% link Docs/general%20info/render-safety-checks.md %}), including Cue/Assembly frame-rate matching and EXPO-region frame alignment.
@@ -21,7 +21,8 @@ parent: Cue Scripts
 - Confirms and applies any region naming/frame-alignment changes as one undoable operation.
 - Applies render settings through REAPER's native project API and invokes REAPER's built-in render action. The REAPER render-dialog test confirmed that `RENDER_SETTINGS=3` selects “Selected tracks (stems)” in this setup; the action sets and verifies that value before rendering. Each selected cue's Bus Tracks are rendered directly as selected-track stems (not via Master) to `03-01_Exports`. REAPER's "Do not render files that are likely silent" option omits silent bus outputs.
 - Uses 48 kHz, Master-channel-count output, custom frame-aligned bounds, and a 24-bit PCM WAV format string. Ultraschall is used only to construct the WAV format string; it does not apply or execute render tables.
-- REAPER's native project API does not expose all previous RenderTable options. This action does not explicitly set the resampling algorithm, offline render speed, or per-file render-stat sidecars; those options are not guaranteed by this implementation.
+- Sets the REAPER render resample config to mode 10 (r8brain free) through SWS `SNM_SetIntConfigVar("projrenderresample", 10)` before each render. This config preference remains set after the script finishes.
+- REAPER's native project API does not expose all previous RenderTable options. This action does not explicitly set offline render speed or per-file render-stat sidecars; those options are not guaranteed by this implementation.
 - Does not overwrite or silently increment existing files. Any existing pre-mix file matching the same project prefix, cue, and version blocks rendering, including unexpected files from an earlier failed/misconfigured attempt.
 
 ## Filename construction

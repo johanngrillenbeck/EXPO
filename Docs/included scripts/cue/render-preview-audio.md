@@ -13,7 +13,7 @@ parent: Cue Scripts
 | Spec'd                  | ✅            |
 | Release version roadmap | v1             |
 | Implemented             | ✅              |
-| Depends on              | Ultraschall API, ReaImGui |
+| Depends on              | Ultraschall API, ReaImGui, SWS |
 
 **Script Logic:**
 - Applies [safety checks]({% link Docs/general%20info/render-safety-checks.md %})
@@ -27,7 +27,7 @@ parent: Cue Scripts
 - Renders the master mix as an MP3 to `04_Previews` using REAPER's native render action and project render settings. Ultraschall is used only to create the MP3 format configuration string (320 kbps CBR, quality 2).
 - Before rendering, snapshots the current native render settings and project dirty state, then restores them after completion or failure. Each render is counted only if the exact expected MP3 appears as a new file; unexpected or incremented filenames stop the run.
 
-**Native render limitations:** The action explicitly configures master-mix mode, custom frame-aligned bounds, stereo, 48 kHz, output format/path, and disables tails, normalization, dither, and adding output to the project. REAPER's project render API does not expose the prior RenderTable choices for full-speed offline mode or r8brain resampling, so those depend on the user's REAPER render preferences and must be checked in REAPER.
+**Native render settings:** Before each native render, the action uses SWS `SNM_SetIntConfigVar("projrenderresample", 10)` to set r8brain free. This is a REAPER config preference and remains set after the script finishes. The action also configures master-mix mode, custom frame-aligned bounds, stereo, 48 kHz, output format/path, and disables tails, normalization, dither, and adding output to the project. Full-speed offline mode is not exposed through the native project render settings used here.
 
 **v2 roadmap:**
 - find a way to automatically apply stereo fold down remporarily during render.

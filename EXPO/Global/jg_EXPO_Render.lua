@@ -9,6 +9,8 @@
 
 local R = {}
 
+R.NATIVE_RENDER_ACTION_ID = 42230 -- File: Render project, using most recent render settings, auto-close render dialog
+
 local NATIVE_RENDER_NUMBER_KEYS = {
 	"RENDER_SETTINGS",
 	"RENDER_BOUNDSFLAG",
@@ -199,6 +201,29 @@ function R.applyNativeRenderSettings(project, numbers, strings)
 			if not ok then
 				return false, err
 			end
+		end
+	end
+	return true
+end
+
+---Sets the REAPER render resample mode through SWS and verifies it when readable.
+---@param mode integer
+---@return boolean success, string|nil error
+function R.setRenderResampleMode(mode)
+	if type(reaper.SNM_SetIntConfigVar) ~= "function" then
+		return false, "SWS SNM_SetIntConfigVar is unavailable. Install or enable SWS."
+	end
+	local ok, setResult = pcall(reaper.SNM_SetIntConfigVar, "projrenderresample", mode)
+	if not ok or setResult == false then
+		return false, "SWS could not set the REAPER render resample mode to " .. tostring(mode) .. "."
+	end
+	if type(reaper.SNM_GetIntConfigVar) == "function" then
+		local getOk, actual = pcall(reaper.SNM_GetIntConfigVar, "projrenderresample", -1)
+		if not getOk or actual ~= mode then
+			return false,
+				"REAPER render resample mode verification failed: expected " .. tostring(mode) .. ", got " .. tostring(
+					actual
+				) .. "."
 		end
 	end
 	return true
