@@ -16,9 +16,7 @@ parent: Cue Scripts
 | Depends on              | Ultraschall API, ReaImGui |
 
 **Script Logic:**
-- For safety: Checks if current project is valid Cue
-- For safety: Checks if current Cue Project and Assembly Project have the same FPS setting.
-- Iterates through all regions on EXPO Ruler Lane to check if their start and end points are on a whole frame number, moves start forward or end backward if necessary.
+- Applies [safety checks]({% link Docs/general%20info/render-safety-checks.md %})
 - Parses region names on EXPO Ruler Lane:
     - If name matches cue ID **and** version number from the .rpp Cue Project filename, continues
     - Same goes for multiple regions: If their names match the project filename, prompt which ones to export.
@@ -27,13 +25,6 @@ parent: Cue Scripts
 - Appends timecode (or overwrites existing timecode) of regions that are due to be rendered (e.g. "1m04_v7 01:02:32:03 - 01:05:01:22")
 - Looks at the channel configuration of master track. If > 2, ask user if stereo fold down has been applied and give them the option to continue or abort.
 - Renders master track as mp3 to 04_Previews with a rendertable according to the render conventions for previews.
-
-**Safety and selection behavior:**
-- Aborts if the EXPO lane has no regions, if regions cannot be unambiguously associated with cues in the project filename, or if multiple regions map to the same cue/output.
-- In a multicue project, shows matched cues and missing-cue warnings in a ReaImGui checklist. Missing cues are skipped; selected matched cues can still be rendered.
-- Treats leading-zero version variants (for example `v01` and `v1`) as the same version. Existing preview files are never overwritten or silently incremented; a conflict aborts and asks the user to check the version index.
-- Calculates frame alignment for every EXPO-lane region. After confirming any region-name/version corrections and alignment, applies all approved edits as one undoable operation before rendering.
-- If the master has more than two channels, requires confirmation that stereo fold-down has already been applied. Automatic temporary fold-down is deferred to v2.
 
 **v2 roadmap:**
 - find a way to automatically apply stereo fold down remporarily during render.

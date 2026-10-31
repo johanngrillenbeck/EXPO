@@ -26,7 +26,7 @@ local PREVIEW_RENDER_STRING = {
 -- Commented entries document API defaults only; CreateNewRenderTable supplies them.
 -- ReaScript action-specific values (format/source/bounds/paths) are not Global defaults.
 local PREVIEW_RENDER_TABLE = {
-	-- AddToProj = false, -- boolean; add rendered items to new tracks (default false)
+	AddToProj = false, -- boolean; do not add rendered items to new tracks (factory default false)
 	-- Brickwall_Limiter_Enabled = false, -- boolean; limiter enabled (default false)
 	-- Brickwall_Limiter_Method = 1, -- integer; 1 peak, 2 true peak (default 1)
 	-- Brickwall_Limiter_Target = 1, -- number; limiter target in dB (default 1)
@@ -49,11 +49,10 @@ local PREVIEW_RENDER_TABLE = {
 	-- Normalize_Only_Files_Too_Loud = false, -- boolean; normalize only files exceeding target (default false)
 	-- RenderString = "", -- string; Base64 render-format config (factory default empty; set from MP3 builder)
 	SilentlyIncrementFilename = false, -- boolean; silently increment on conflict (factory default true; EXPO versioning forbids increments)
-	-- AddToProj = false, -- boolean; add rendered items to project (factory default false; execution also explicitly disables this)
+	CloseAfterRender = true, -- boolean; close render dialog when done (factory default true)
 	-- SaveCopyOfProject = false, -- boolean; save RPP copy alongside render (default false)
 	-- RenderQueueDelay = false, -- boolean; delay queued renders (default false)
 	-- RenderQueueDelaySeconds = 0, -- integer; queued render delay seconds (default 0)
-	-- CloseAfterRender = true, -- boolean; close render dialog when done (default true; explicitly set at execution)
 	-- EmbedStretchMarkers = false, -- boolean; embed stretch markers/transient guides (default false)
 	-- RenderString2 = "", -- string; secondary-format Base64 render config (default empty)
 	-- EmbedTakeMarkers = false, -- boolean; embed take markers (default false)
@@ -119,60 +118,6 @@ local function regionList(regions)
 	return table.concat(lines, "\n")
 end
 
-local function cueList(cues)
-	local labels = {}
-	for _, cue in ipairs(cues) do
-		table.insert(labels, cue.cueId .. "_" .. cue.version)
-	end
-	return table.concat(labels, ", ")
-end
-
-local function getExpoRoot(projectPath)
-	local normalized = projectPath:gsub("\\", "/")
-	local cueFolder = normalized:match("^(.*)/[^/]+$")
-	return cueFolder and cueFolder:match("^(.*)/[^/]+$")
-end
-
-local function checkProject()
-	local valid, report = H.validateCue()
-	if not valid then
-		local manual, fixable = Messages.collectIssues(report)
-		local detail = Messages.buildIssueText(manual, fixable)
-		if detail == "" then
-			detail = "The current project does not pass EXPO Cue validation."
-		end
-		stop(Messages.withFrameRate(detail, report))
-		return nil
-	end
-
-	local fps = H.compareCueAssemblyFrameRate()
-	if not fps.matches then
-		local details = {
-			cue_not_saved = "Save the current Cue project before rendering.",
-			invalid_cue_project = "The current project is not a valid saved Cue project.",
-			assembly_missing = "The paired Assembly project is missing:\n" .. tostring(fps.assemblyPath),
-			assembly_needs_save = "The paired Assembly project has unsaved changes. Save it and run this action again.",
-			temporary_tab_failed = "Could not safely create a temporary project tab to inspect the paired Assembly.",
-			assembly_load_failed = "Could not load or inspect the paired Assembly.\n\n"
-				.. tostring(fps.detail or fps.assemblyPath),
-			cleanup_failed = "The FPS check could not safely clean up its temporary project tab.\n\n"
-				.. tostring(fps.detail),
-		}
-		if fps.status == "mismatch" then
-			details.mismatch = string.format(
-				"Cue and Assembly FPS/drop-frame settings differ.\n\nCue: %.3f fps (%s)\nAssembly: %.3f fps (%s)\n\nCorrect the project settings, then run this action again.",
-				fps.cueFrameRate,
-				fps.cueDropFrame and "DF" or "NDF",
-				fps.assemblyFrameRate,
-				fps.assemblyDropFrame and "DF" or "NDF"
-			)
-		end
-		stop(details[fps.status] or ("Cue/Assembly FPS preflight failed: " .. tostring(fps.status)))
-		return nil
-	end
-	return report
-end
-
 local function showCueChecklist(candidates, missing, done)
 	local imgui = r
 	for _, functionName in ipairs({
@@ -219,7 +164,7 @@ local function showCueChecklist(candidates, missing, done)
 			if #missing > 0 then
 				imgui.ImGui_Text(
 					ctx,
-					"No matching EXPO region for: " .. cueList(missing) .. ". These cues will be skipped."
+					"No matching EXPO region for: " .. H.cueList(missing) .. ". These cues will be skipped."
 				)
 			end
 			for _, region in ipairs(candidates) do
@@ -299,7 +244,7 @@ local function buildPreviewRenderTable(ultraschallApi, renderString, outputFolde
 end
 
 local function runRender(details, regions, selectedByCueId, nameOverrides, ultraschallApi, renderString)
-	local outputFolder = getExpoRoot(details.projectPath) .. "/04_Previews"
+	local outputFolder = H.getExpoRoot(details.projectPath) .. "/04_Previews"
 	local outputPlans, conflicts = {}, {}
 	local conflictSet = {}
 	local function addConflict(path)
@@ -432,11 +377,7 @@ local function runRender(details, regions, selectedByCueId, nameOverrides, ultra
 			table.insert(failed, plan.outputPath .. "\n  " .. tostring(buildError))
 			break
 		end
-		local result = Render.renderProjectWithTable(ultraschallApi, renderTable, {
-			addToProject = false,
-			closeAfterRender = true,
-			silentlyIncrementFilename = false,
-		})
+		local result = Render.renderProjectWithTable(ultraschallApi, renderTable)
 		if result.ok then
 			for _, file in ipairs(result.files) do
 				table.insert(rendered, file)
@@ -475,7 +416,7 @@ local function main()
 		return
 	end
 
-	local report = checkProject()
+	local report = H.cueRenderPreflight(Messages, TITLE)
 	if not report then
 		return
 	end

@@ -84,7 +84,7 @@ Audio: AAC, 320 kbps
 ### Full Mix and STEMS (both pre-mix and mixed)
 **Options**
 Sample Rate: 48000 Hz
-Channels: 6
+Channels: 6 for mixed STEMs and full mixes. Pre-mix STEMs rendered from a Cue project use the Master Channel count; see [render safety checks]({% link Docs/general%20info/render-safety-checks.md %}).
 Full-speed Offline
 Mix/process FX at project or hardware sample rate
 Resample mode: r8brain free
@@ -94,4 +94,3 @@ Format: WAV
 bit depth: 24 bit PCM
 
 Save outfile.render_stats.html
-

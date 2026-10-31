@@ -942,6 +942,74 @@ function H.matchCueRegions(cues, regions)
 	return result
 end
 
+---Formats cue/version identifiers for user-facing lists.
+---@param cues table[]
+---@return string
+function H.cueList(cues)
+	local labels = {}
+	for _, cue in ipairs(cues) do
+		table.insert(labels, cue.cueId .. "_" .. cue.version)
+	end
+	return table.concat(labels, ", ")
+end
+
+---Gets the EXPO project root from a saved Cue or Assembly project path.
+---@param projectPath string
+---@return string|nil
+function H.getExpoRoot(projectPath)
+	local normalized = tostring(projectPath or ""):gsub("\\", "/")
+	local projectFolder = normalized:match("^(.*)/[^/]+$")
+	return projectFolder and projectFolder:match("^(.*)/[^/]+$")
+end
+
+---Runs shared Cue-render safety checks and displays a user-facing error when blocked.
+---@param messages table EXPO Messages module
+---@param title string Dialog title
+---@return ExpoReport|nil report
+function H.cueRenderPreflight(messages, title)
+	local valid, report = H.validateCue()
+	if not valid then
+		local manual, fixable = messages.collectIssues(report)
+		local detail = messages.buildIssueText(manual, fixable)
+		if detail == "" then
+			detail = "The current project does not pass EXPO Cue validation."
+		end
+		reaper.ShowMessageBox(messages.withFrameRate(detail, report), title, 0)
+		return nil
+	end
+
+	local fps = H.compareCueAssemblyFrameRate()
+	if not fps.matches then
+		local details = {
+			cue_not_saved = "Save the current Cue project before rendering.",
+			invalid_cue_project = "The current project is not a valid saved Cue project.",
+			assembly_missing = "The paired Assembly project is missing:\n" .. tostring(fps.assemblyPath),
+			assembly_needs_save = "The paired Assembly project has unsaved changes. Save it and run this action again.",
+			temporary_tab_failed = "Could not safely create a temporary project tab to inspect the paired Assembly.",
+			assembly_load_failed = "Could not load or inspect the paired Assembly.\n\n"
+				.. tostring(fps.detail or fps.assemblyPath),
+			cleanup_failed = "The FPS check could not safely clean up its temporary project tab.\n\n"
+				.. tostring(fps.detail),
+		}
+		if fps.status == "mismatch" then
+			details.mismatch = string.format(
+				"Cue and Assembly FPS/drop-frame settings differ.\n\nCue: %.3f fps (%s)\nAssembly: %.3f fps (%s)\n\nCorrect the project settings, then run this action again.",
+				fps.cueFrameRate,
+				fps.cueDropFrame and "DF" or "NDF",
+				fps.assemblyFrameRate,
+				fps.assemblyDropFrame and "DF" or "NDF"
+			)
+		end
+		reaper.ShowMessageBox(
+			details[fps.status] or ("Cue/Assembly FPS preflight failed: " .. tostring(fps.status)),
+			title,
+			0
+		)
+		return nil
+	end
+	return report
+end
+
 ---Returns the first ruler lane with the requested exact name.
 ---@param name string
 ---@return ExpoRulerLane|nil

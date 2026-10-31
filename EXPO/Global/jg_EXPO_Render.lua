@@ -77,28 +77,21 @@ function R.createRenderTable(ultraschall, overrides)
 	return renderTable
 end
 
----Executes any caller-configured render table and normalizes Ultraschall's return values.
+---Executes a caller-configured render table and normalizes Ultraschall's return values.
 ---@param ultraschall table
 ---@param renderTable table
----@param options table|nil addToProject, closeAfterRender, silentlyIncrementFilename
 ---@return table result {ok, count, files, detail}
-function R.renderProjectWithTable(ultraschall, renderTable, options)
+function R.renderProjectWithTable(ultraschall, renderTable)
 	if type(ultraschall) ~= "table" or type(ultraschall.RenderProject_RenderTable) ~= "function" then
 		return { ok = false, count = -1, files = {}, detail = "Ultraschall RenderProject_RenderTable is unavailable." }
 	end
-	options = options or {}
-	local addToProject = options.addToProject == true
-	local closeAfterRender = options.closeAfterRender ~= false
-	local silentlyIncrementFilename = options.silentlyIncrementFilename == true
+	if type(renderTable) ~= "table" then
+		return { ok = false, count = -1, files = {}, detail = "A valid render table is required." }
+	end
 
-	local ok, count, itemStateChunks, files = pcall(
-		ultraschall.RenderProject_RenderTable,
-		nil,
-		renderTable,
-		addToProject,
-		closeAfterRender,
-		silentlyIncrementFilename
-	)
+	-- Keep the table as the single source of render configuration. Omitting the
+	-- duplicate positional flags lets Ultraschall use the values in RenderTable.
+	local ok, count, itemStateChunks, files = pcall(ultraschall.RenderProject_RenderTable, nil, renderTable)
 	if not ok then
 		return { ok = false, count = -1, files = {}, detail = tostring(count) }
 	end
