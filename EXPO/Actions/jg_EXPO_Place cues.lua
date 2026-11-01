@@ -6,7 +6,7 @@
 -- @links
 --   GitHub https://github.com/johanngrillenbeck/EXPO
 -- @changelog
---   Initial implementation: inventory and place rendered audio.
+--   Place media directly on resolved tracks and assign new regions to their EXPO ruler lanes.
 -- @noindex
 
 local r = reaper
@@ -116,21 +116,24 @@ local function addSpan(spans, cueId, versionKey, startPosition, endPosition)
 end
 
 local function getTrackPathMap(project)
-	local paths, stack = {}, {}
+	local paths = {}
+	local function getPath(track)
+		local _, name = r.GetTrackName(track)
+		local parent = r.GetParentTrack(track)
+		if parent then
+			return getPath(parent) .. "/" .. name
+		end
+		return name
+	end
+
 	for index = 0, r.CountTracks(project) - 1 do
 		local track = r.GetTrack(project, index)
-		local _, name = r.GetTrackName(track)
-		local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
-		local path = #stack > 0 and (table.concat(stack, "/") .. "/" .. name) or name
-		if not paths[path] then
+		local path = H.normalizePath(getPath(track))
+		if paths[path] == nil then
 			paths[path] = track
-		end
-		if depth > 0 then
-			table.insert(stack, name)
-		elseif depth < 0 then
-			for _ = 1, -depth do
-				table.remove(stack)
-			end
+		else
+			-- A duplicate full path is ambiguous; never silently route to its first track.
+			paths[path] = false
 		end
 	end
 	return paths
@@ -141,17 +144,20 @@ local function insertStemTrack(project, stemName)
 	for index = 0, r.CountTracks(project) - 1 do
 		local track = r.GetTrack(project, index)
 		local _, name = r.GetTrackName(track)
-		if name == "CUES" then
+		if name == "CUES" and not r.GetParentTrack(track) then
+			if cuesTrack then
+				return nil, "Multiple top-level CUES tracks exist. Rename or remove the duplicate before placing cues."
+			end
 			cuesTrack = track
-			break
 		end
 	end
-	if not cuesTrack or r.GetMediaTrackInfo_Value(cuesTrack, "I_FOLDERDEPTH") <= 0 then
+	local folderDepth = cuesTrack and r.GetMediaTrackInfo_Value(cuesTrack, "I_FOLDERDEPTH") or 0
+	if not cuesTrack or folderDepth <= 0 then
 		return nil, "Could not find a valid CUES folder track."
 	end
 
 	local startIndex = math.floor(r.GetMediaTrackInfo_Value(cuesTrack, "IP_TRACKNUMBER") - 1)
-	local depth = 1
+	local depth = folderDepth
 	local insertionIndex
 	for index = startIndex + 1, r.CountTracks(project) - 1 do
 		local track = r.GetTrack(project, index)
@@ -174,7 +180,10 @@ local function insertStemTrack(project, stemName)
 end
 
 local function ensureTrack(project, trackPaths, stemName)
-	local path = "CUES/" .. stemName
+	local path = H.normalizePath("CUES/" .. stemName)
+	if trackPaths[path] == false then
+		return nil, "Multiple tracks have the name path " .. path .. ". Rename the duplicates before placing cues."
+	end
 	if trackPaths[path] then
 		return trackPaths[path]
 	end
@@ -238,15 +247,52 @@ local function setRegionLane(project, region, laneName, position, endPosition, n
 	if not lane then
 		return false, "Required ruler lane is missing: " .. laneName
 	end
-	local index = r.AddProjectMarker2(project, true, position, endPosition, name, -1, 0)
-	if index < 0 then
+	local marker = r.AddRegionOrMarker(project, true, position, endPosition, name, -1, 0)
+	if not marker then
 		return false, "Could not create region " .. name .. "."
 	end
-	local marker = r.GetRegionOrMarker(project, index, "")
-	if not marker or not r.SetRegionOrMarkerInfo_Value(project, marker, "I_LANENUMBER", lane.index) then
+	if not r.SetRegionOrMarkerInfo_Value(project, marker, "I_LANENUMBER", lane.index) then
 		return false, "Could not assign region " .. name .. " to " .. laneName .. "."
 	end
 	return true
+end
+
+---Creates a media item on an explicit target track and attaches the rendered file as its source.
+---@param track MediaTrack
+---@param file table
+---@return MediaItem|nil item, number|nil length, string|nil error
+local function createRenderItem(track, file)
+	local source = r.PCM_Source_CreateFromFile(file.path)
+	if not source then
+		return nil, nil, "REAPER could not open " .. displayName(file.path)
+	end
+
+	local item = r.AddMediaItemToTrack(track)
+	local take = item and r.AddTakeToMediaItem(item)
+	if not item or not take then
+		if item then
+			r.DeleteTrackMediaItem(track, item)
+		end
+		r.PCM_Source_Destroy(source)
+		return nil, nil, "REAPER could not create an item for " .. displayName(file.path)
+	end
+
+	if not r.SetMediaItemTake_Source(take, source) then
+		r.PCM_Source_Destroy(source)
+		r.DeleteTrackMediaItem(track, item)
+		return nil, nil, "REAPER could not attach the source for " .. displayName(file.path)
+	end
+
+	local length = r.GetMediaSourceLength(source)
+	if not length or length <= 0 then
+		r.DeleteTrackMediaItem(track, item)
+		return nil, nil, "REAPER reported an invalid source length for " .. displayName(file.path)
+	end
+
+	r.SetMediaItemInfo_Value(item, "D_POSITION", file.startPosition)
+	r.SetMediaItemInfo_Value(item, "D_LENGTH", length)
+	r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", file.versionIndex - 1)
+	return item, length
 end
 
 local function regionName(cueId, version, startPosition, endPosition)
@@ -381,12 +427,10 @@ local function main()
 	for i = 0, r.CountSelectedTracks(project) - 1 do
 		originalTracks[r.GetSelectedTrack(project, i)] = true
 	end
-	local originalItems = {}
 	local originalSelectedItems = {}
 	for i = 0, r.CountMediaItems(project) - 1 do
 		local item = r.GetMediaItem(project, i)
 		local _, guid = r.GetSetMediaItemInfo_String(item, "GUID", "", false)
-		originalItems[guid] = true
 		if r.IsMediaItemSelected(item) then
 			originalSelectedItems[guid] = true
 		end
@@ -406,42 +450,19 @@ local function main()
 		end
 
 		for _, file in ipairs(toImport) do
-			local target = file.mediaKind == "preview" and trackPaths["CUES/Preview"]
-				or trackPaths["CUES/" .. file.stem]
+			local targetPath = H.normalizePath(file.mediaKind == "preview" and "CUES/Preview" or "CUES/" .. file.stem)
+			local target = trackPaths[targetPath]
 			if not target then
-				table.insert(failures, "No target track for " .. displayName(file.path))
+				local reason = target == false and ("Multiple tracks have the name path " .. targetPath .. ".")
+					or ("No target track at " .. targetPath .. ".")
+				table.insert(failures, reason .. " Could not place " .. displayName(file.path))
 			else
 				ensureVersionLane(target, file.versionIndex)
-				while r.CountSelectedTracks(project) > 0 do
-					r.SetTrackSelected(r.GetSelectedTrack(project, 0), false)
-				end
-				r.SetTrackSelected(target, true)
-				r.SetEditCurPos(file.startPosition, false, false)
-				local insertResult = r.InsertMedia(file.path, 0)
-				local inserted
-				if insertResult ~= 0 then
-					for itemIndex = 0, r.CountTrackMediaItems(target) - 1 do
-						local item = r.GetTrackMediaItem(target, itemIndex)
-						local _, guid = r.GetSetMediaItemInfo_String(item, "GUID", "", false)
-						if not originalItems[guid] then
-							inserted = item
-							originalItems[guid] = true
-							break
-						end
-					end
-				end
+				local inserted, length, importError = createRenderItem(target, file)
 				if not inserted then
-					table.insert(failures, "REAPER could not import " .. displayName(file.path))
+					table.insert(failures, importError or ("REAPER could not import " .. displayName(file.path)))
 				else
 					importCount = importCount + 1
-					r.SetMediaItemInfo_Value(inserted, "D_POSITION", file.startPosition)
-					r.SetMediaItemInfo_Value(inserted, "I_FIXEDLANE", file.versionIndex - 1)
-					local sourceTake = r.GetActiveTake(inserted)
-					local mediaSource = sourceTake and r.GetMediaItemTake_Source(sourceTake)
-					local length = mediaSource and r.GetMediaSourceLength(mediaSource)
-					if length and length > 0 then
-						r.SetMediaItemInfo_Value(inserted, "D_LENGTH", length)
-					end
 					addSpan(
 						versionSpans,
 						file.cueId,
