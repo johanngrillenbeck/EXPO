@@ -9,6 +9,7 @@
 --   Place media directly on resolved tracks and assign new regions to their EXPO ruler lanes.
 --   Keep Preview and Full Mix as the first two CUES child tracks on every placement run.
 --   Match all CUES child lane counts to the highest discovered render version.
+--   Group all CUES child tracks in Group 1 and enable media/razor edit lead and follow.
 -- @noindex
 
 local r = reaper
@@ -365,6 +366,60 @@ local function ensureSharedCueLaneCount(project, minimumLaneCount)
 	return true
 end
 
+---Assigns every direct CUES child to Group 1 with media/razor edit lead and follow enabled.
+---@param project ReaProject
+---@return boolean success, string|nil error
+local function ensureCueTrackGroup(project)
+	if type(r.GetSetTrackGroupMembership) ~= "function" or type(r.GetSetProjectInfo_String) ~= "function" then
+		return false, "This REAPER version does not expose the track-group APIs required to configure CUES."
+	end
+
+	local cuesTrack
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		local _, name = r.GetTrackName(track)
+		if name == "CUES" and not r.GetParentTrack(track) then
+			if cuesTrack then
+				return false, "Multiple top-level CUES tracks exist; could not configure track grouping."
+			end
+			cuesTrack = track
+		end
+	end
+	if not cuesTrack or r.GetMediaTrackInfo_Value(cuesTrack, "I_FOLDERDEPTH") <= 0 then
+		return false, "Could not find a valid CUES folder while configuring track grouping."
+	end
+
+	local groupNameOk = r.GetSetProjectInfo_String(project, "TRACK_GROUP_NAME:1", "CUES", true)
+	if not groupNameOk then
+		return false, "REAPER could not name track Group 1 as CUES."
+	end
+
+	local groupBit = 1 -- Group 1 is the low bit in each track-group membership mask.
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		if r.GetParentTrack(track) == cuesTrack then
+			r.GetSetTrackGroupMembership(track, "MEDIA_EDIT_LEAD", groupBit, groupBit)
+			r.GetSetTrackGroupMembership(track, "MEDIA_EDIT_FOLLOW", groupBit, groupBit)
+		end
+	end
+
+	local _, storedGroupName = r.GetSetProjectInfo_String(project, "TRACK_GROUP_NAME:1", "", false)
+	if storedGroupName ~= "CUES" then
+		return false, "REAPER did not retain CUES as the name of track Group 1."
+	end
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		if r.GetParentTrack(track) == cuesTrack then
+			local lead = r.GetSetTrackGroupMembership(track, "MEDIA_EDIT_LEAD", 0, 0)
+			local follow = r.GetSetTrackGroupMembership(track, "MEDIA_EDIT_FOLLOW", 0, 0)
+			if lead % (groupBit * 2) < groupBit or follow % (groupBit * 2) < groupBit then
+				return false, "REAPER could not enable Media/Razor Edit Lead and Follow for every CUES child track."
+			end
+		end
+	end
+	return true
+end
+
 local function findCueRegion(regions, cueId)
 	local found
 	for _, region in ipairs(regions) do
@@ -492,6 +547,15 @@ local function main()
 	enumerateFullMixes(root .. "/05_Delivery", report.prefix, files, warnings)
 	if #files == 0 then
 		local suffix = #warnings > 0 and ("\n\n" .. table.concat(warnings, "\n")) or ""
+		r.Undo_BeginBlock2(project)
+		local groupCallOk, groupOk, groupError = pcall(ensureCueTrackGroup, project)
+		r.Undo_EndBlock2(project, "EXPO: Configure CUES track group", -1)
+		r.UpdateArrange()
+		if not groupCallOk or not groupOk then
+			suffix = suffix
+				.. "\n\nCould not configure the CUES track group: "
+				.. tostring(groupCallOk and groupError or groupOk)
+		end
 		r.ShowMessageBox(
 			"No matching audio preview, pre-mix stem, or full mix renders were found." .. suffix,
 			TITLE,
@@ -686,6 +750,12 @@ local function main()
 		table.insert(failures, "Could not enforce Preview and Full Mix track order: " .. tostring(orderOk))
 	elseif not orderOk then
 		table.insert(failures, orderError or "Could not enforce Preview and Full Mix track order.")
+	end
+	local groupCallOk, groupOk, groupError = pcall(ensureCueTrackGroup, project)
+	if not groupCallOk then
+		table.insert(failures, "Could not configure the CUES track group: " .. tostring(groupOk))
+	elseif not groupOk then
+		table.insert(failures, groupError or "Could not configure the CUES track group.")
 	end
 	r.PreventUIRefresh(-1)
 	while r.CountSelectedTracks(project) > 0 do
