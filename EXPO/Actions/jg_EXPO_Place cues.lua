@@ -493,7 +493,7 @@ local function main()
 	if #files == 0 then
 		local suffix = #warnings > 0 and ("\n\n" .. table.concat(warnings, "\n")) or ""
 		r.ShowMessageBox(
-		"No matching audio preview, pre-mix stem, or full mix renders were found." .. suffix,
+			"No matching audio preview, pre-mix stem, or full mix renders were found." .. suffix,
 			TITLE,
 			MB_OK
 		)
@@ -556,19 +556,15 @@ local function main()
 		end
 	end
 
-	local sources, sourceItems = inspectProjectSources(project)
+	local _, sourceItems = inspectProjectSources(project)
 	local toImport = {}
+	local alreadyPlaced = {}
 	local versionSpans = {}
 	for _, file in ipairs(uniqueFiles) do
 		local sourceKey = H.normalizePath(file.path)
 		local existingItems = sourceItems[sourceKey]
 		if existingItems then
-			if sources[sourceKey] > 1 then
-				table.insert(
-					warnings,
-					"Source already occurs multiple times in the Assembly project: " .. displayName(file.path)
-				)
-			end
+			table.insert(alreadyPlaced, displayName(file.path))
 			for _, itemSpan in ipairs(existingItems) do
 				addSpan(versionSpans, file.cueId, file.normalizedVersion, itemSpan.startPos, itemSpan.endPos)
 			end
@@ -716,6 +712,10 @@ local function main()
 		.. tostring(importCount)
 		.. " render file(s).\n\n"
 		.. "Imported items remain on their version lanes. CUES child tracks share a lane count based on discovered renders. Native comp-lane automation is not yet applied by this initial implementation."
+	if #alreadyPlaced > 0 then
+		table.sort(alreadyPlaced)
+		result = result .. "\n\nAlready placed: \n" .. table.concat(alreadyPlaced, "\n")
+	end
 	if #failures > 0 then
 		result = result .. "\n\nIssues:\n- " .. table.concat(failures, "\n- ")
 	end
