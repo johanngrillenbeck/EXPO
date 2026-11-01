@@ -35,8 +35,8 @@ Two Ruler Lanes with timebase "Time" must exist:
 
 Any Region on those lanes will be available for export.
 
-Regions in the Video Preview Lane should be named with just the `cueID` that it covers. These regions are intended to be manually moved to offer the desired leeway before a cue starts and ends in the video preview. Cues might change in length a bit; if the preview file stays the same, those changes can be more accurately judged by your collaborators, IMHO.
+Regions in the Video Preview Lane are identified by cue ID and version (`[cueId]_[version]`). Newly created regions receive 10 seconds of leeway before and after the cue; existing region bounds remain manually adjustable when a new version is placed.
 
-Regions in the Final Audio Lane should not be manually created or renamed. EXPO will create and update them from the media items once you import audio from a Cue Project. It's scheme works like this: `[cueId]_[version]_TCstart-[HH.MM.SS.FF]_TCend-[HH.MM.SS.FF]`. This is handy if you want to integrate other script logic (maybe link a Cue Sheet? - something I've been working on...); You just have to read out the region name to get the projects state, EXPO updates with every file import from Cue to Assembly.
+Regions in the Final Audio Lane should not be manually created or renamed. EXPO creates and updates them from imported cue media. Names follow the Cue-project EXPO region convention: `[cueId]_[version] [start timecode] - [end timecode]` (for example, `1m06_v03 00:00:00:00 - 00:00:02:00`). Their bounds match the imported items for the cue version. This is handy if you want to integrate other script logic (maybe link a Cue Sheet? - something I've been working on...); You just have to read out the region name to get the projects state, EXPO updates with every file import from Cue to Assembly.
 
 Before each export, EXPO will check if the selected region starts and ends on whole frames. If they don't, EXPO will move the start and end points to the nearest whole frame. For regions on the Final Audio Lane it will update the TC displayed in the region name.

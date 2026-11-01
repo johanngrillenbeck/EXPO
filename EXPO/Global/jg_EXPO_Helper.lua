@@ -840,6 +840,32 @@ function H.normalizeVersion(version)
 	return normalized ~= "" and normalized or "0"
 end
 
+---Returns a stable path comparison key, case-insensitive on Windows.
+---@param path string
+---@return string
+function H.normalizePath(path)
+	local key = tostring(path or ""):gsub("\\", "/")
+	if r.GetOS():match("Win") then
+		key = key:lower()
+	end
+	return key
+end
+
+---Compares normalized numeric version strings without converting them to Lua numbers.
+---@param first string|number
+---@param second string|number
+---@return integer result -1, 0, or 1
+function H.compareVersions(first, second)
+	local a, b = H.normalizeVersion(first), H.normalizeVersion(second)
+	if #a ~= #b then
+		return #a < #b and -1 or 1
+	end
+	if a == b then
+		return 0
+	end
+	return a < b and -1 or 1
+end
+
 ---Parses a Cue or Multicue project filename into its prefix and ordered cue/version pairs.
 ---@param fileName string
 ---@return table|nil parsed, string|nil error
@@ -1096,18 +1122,84 @@ end
 ---@param fileName string
 ---@return table|nil parsed
 function H.parsePreviewFilename(fileName)
-	local prefix, cueId, version, hh, mm, ss, ff =
-		tostring(fileName or ""):match("^([^_]+)_([^_]+)_v(%d+)_preview_TC%-(%d+)%.(%d+)%.(%d+)%.(%d+)%.mp3$")
-	if not prefix or not cueId:match("^%d+m%d+$") then
+	local sourceName = tostring(fileName or "")
+	local prefix, cueId, version, hh, mm, ss, ff = sourceName:match(
+		"^([^_]+)_([^_]+)_[vV](%d+)_[pP][rR][eE][vV][iI][eE][wW]_[tT][cC]%-(%d+)%.(%d+)%.(%d+)%.(%d+)%.[mM][pP]3$"
+	)
+	if not prefix or not cueId:match("^%d+[mM]%d+$") then
 		return nil
 	end
+	local timecode = table.concat({ hh, mm, ss, ff }, ".")
 	return {
 		prefix = prefix,
 		cueId = cueId,
 		version = "v" .. version,
+		versionDigits = version,
 		normalizedVersion = H.normalizeVersion(version),
-		timecode = table.concat({ hh, mm, ss, ff }, "."),
+		timecode = timecode,
+		startPosition = r.parse_timestr_pos(timecode:gsub("%.", ":"), 5),
+		fileName = sourceName,
 	}
+end
+
+---Parses an EXPO pre-mix stem WAV filename.
+---@param fileName string
+---@return table|nil parsed
+function H.parsePremixFilename(fileName)
+	local sourceName = tostring(fileName or "")
+	local prefix, cueId, version, stem, hh, mm, ss, ff = sourceName:match(
+		"^([^_]+)_([^_]+)_[vV](%d+)_([^_]+)_[pP][rR][eE]%-[mM][iI][xX]_[tT][cC]%-(%d+)%.(%d+)%.(%d+)%.(%d+)%.[wW][aA][vV]$"
+	)
+	if not prefix or not cueId:match("^%d+[mM]%d+$") then
+		return nil
+	end
+	local timecode = table.concat({ hh, mm, ss, ff }, ".")
+	return {
+		prefix = prefix,
+		cueId = cueId,
+		version = "v" .. version,
+		versionDigits = version,
+		normalizedVersion = H.normalizeVersion(version),
+		stem = stem,
+		timecode = timecode,
+		startPosition = r.parse_timestr_pos(timecode:gsub("%.", ":"), 5),
+		fileName = sourceName,
+	}
+end
+
+---Finds existing pre-mix files for a cue/version, treating leading-zero versions as equivalent.
+---@param directory string
+---@param prefix string
+---@param cue table
+---@return string[] paths
+function H.findPremixVersionConflicts(directory, prefix, cue)
+	local matches = {}
+	local index = 0
+	while true do
+		local fileName = r.EnumerateFiles(directory, index)
+		if not fileName then
+			break
+		end
+		local parsed = H.parsePremixFilename(fileName)
+		if
+			parsed
+			and H.normalizePath(parsed.prefix) == H.normalizePath(prefix)
+			and H.normalizePath(parsed.cueId) == H.normalizePath(cue.cueId)
+			and parsed.normalizedVersion == cue.normalizedVersion
+		then
+			table.insert(matches, directory .. "/" .. fileName)
+		end
+		index = index + 1
+	end
+	return matches
+end
+
+---Returns a project track by its complete folder path, such as "CUES/Preview".
+---@param path string
+---@return MediaTrack|nil track
+function H.getTrackByPath(path)
+	local info = getTrackPaths()[path]
+	return info and r.GetTrack(0, info.index) or nil
 end
 
 ---Finds existing preview files for a cue/version, treating leading-zero versions as equivalent.
@@ -1126,8 +1218,8 @@ function H.findPreviewVersionConflicts(directory, prefix, cue)
 		local parsed = H.parsePreviewFilename(fileName)
 		if
 			parsed
-			and parsed.prefix == prefix
-			and parsed.cueId == cue.cueId
+			and H.normalizePath(parsed.prefix) == H.normalizePath(prefix)
+			and H.normalizePath(parsed.cueId) == H.normalizePath(cue.cueId)
 			and parsed.normalizedVersion == cue.normalizedVersion
 		then
 			table.insert(matches, directory .. "/" .. fileName)

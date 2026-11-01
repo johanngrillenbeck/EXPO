@@ -203,19 +203,7 @@ local function collectBusTracks()
 end
 
 local function parsePremixFilename(fileName)
-	local sourceName = tostring(fileName or "")
-	local parseName = r.GetOS():match("Win") and sourceName:lower() or sourceName
-	local prefix, cueId, version, stem, hh, mm, ss, ff =
-		parseName:match("^([^_]+)_([^_]+)_v(%d+)_([^_]+)_pre%-mix_TC%-(%d+)%.(%d+)%.(%d+)%.(%d+)%.wav$")
-	if not prefix or not cueId:match("^%d+m%d+$") then
-		return nil
-	end
-	return {
-		prefix = prefix,
-		cueId = cueId,
-		normalizedVersion = H.normalizeVersion(version),
-		stem = stem,
-	}
+	return H.parsePremixFilename(fileName)
 end
 
 local function normalizedPath(path)
@@ -231,25 +219,7 @@ local function displayFileName(path)
 end
 
 local function findStemConflicts(directory, prefix, cue)
-	local matches = {}
-	local index = 0
-	while true do
-		local fileName = r.EnumerateFiles(directory, index)
-		if not fileName then
-			break
-		end
-		local parsed = parsePremixFilename(fileName)
-		if
-			parsed
-			and normalizedPath(parsed.prefix) == normalizedPath(prefix)
-			and parsed.cueId == cue.cueId
-			and parsed.normalizedVersion == cue.normalizedVersion
-		then
-			table.insert(matches, directory .. "/" .. fileName)
-		end
-		index = index + 1
-	end
-	return matches
+	return H.findPremixVersionConflicts(directory, prefix, cue)
 end
 
 local function applyNativeRenderSettings(project, renderString, cueSettings)
