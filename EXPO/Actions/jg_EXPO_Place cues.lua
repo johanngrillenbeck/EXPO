@@ -2,11 +2,13 @@
 -- @author Johann Grillenbeck
 -- @about
 --   # EXPO: Place cues
---   Imports rendered cue previews and pre-mix stems into version-numbered Assembly lanes.
+--   Imports rendered cue previews, pre-mix stems, and full mixes into version-numbered Assembly lanes.
 -- @links
 --   GitHub https://github.com/johanngrillenbeck/EXPO
 -- @changelog
 --   Place media directly on resolved tracks and assign new regions to their EXPO ruler lanes.
+--   Keep Preview and Full Mix as the first two CUES child tracks on every placement run.
+--   Match all CUES child lane counts to the highest discovered render version.
 -- @noindex
 
 local r = reaper
@@ -71,6 +73,53 @@ local function enumerateAudio(directory, parser, mediaKind, prefix, files, warni
 				end
 			elseif not parsed and fileName:lower():find("_v%d+_") then
 				table.insert(warnings, "Could not parse supported render filename: " .. fileName)
+			end
+		end
+	end
+end
+
+local function parseFullMixFilename(fileName)
+	local sourceName = tostring(fileName or "")
+	local prefix, cueId, version, hh, mm, ss, ff = sourceName:match(
+		"^([^_]+)_([^_]+)_[vV](%d+)_[fF][uU][lL][lL]%-[mM][iI][xX]_[tT][cC]%-(%d+)%.(%d+)%.(%d+)%.(%d+)%.[wW][aA][vV]$"
+	)
+	if not prefix or not cueId:match("^%d+[mM]%d+$") then
+		return nil
+	end
+	local timecode = table.concat({ hh, mm, ss, ff }, ".")
+	return {
+		prefix = prefix,
+		cueId = cueId,
+		version = "v" .. version,
+		normalizedVersion = H.normalizeVersion(version),
+		timecode = timecode,
+		startPosition = r.parse_timestr_pos(timecode:gsub("%.", ":"), 5),
+		fileName = sourceName,
+	}
+end
+
+local function enumerateFullMixes(directory, prefix, files, warnings)
+	local index = 0
+	while true do
+		local fileName = r.EnumerateFiles(directory, index)
+		if not fileName then
+			break
+		end
+		index = index + 1
+		if fileName:lower():match("%.wav$") and fileName:lower():find("_full%-mix_tc%-") then
+			local parsed = parseFullMixFilename(fileName)
+			if parsed and H.normalizePath(parsed.prefix) == H.normalizePath(prefix) then
+				local lane = #parsed.normalizedVersion <= 4 and tonumber(parsed.normalizedVersion) or nil
+				if not lane or lane < 1 then
+					table.insert(warnings, "Invalid version index in " .. fileName)
+				else
+					parsed.versionIndex = lane
+					parsed.mediaKind = "fullmix"
+					parsed.path = directory .. "/" .. fileName
+					table.insert(files, parsed)
+				end
+			elseif not parsed then
+				table.insert(warnings, "Could not parse supported full mix filename: " .. fileName)
 			end
 		end
 	end
@@ -194,6 +243,78 @@ local function ensureTrack(project, trackPaths, stemName)
 	return track
 end
 
+---Keeps the required cue tracks at the start of the CUES folder in a stable order.
+---@param project ReaProject
+---@return boolean success, string|nil error
+local function ensureCueTrackOrder(project)
+	local cuesTrack
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		local _, name = r.GetTrackName(track)
+		if name == "CUES" and not r.GetParentTrack(track) then
+			if cuesTrack then
+				return false, "Multiple top-level CUES tracks exist; could not enforce Preview and Full Mix order."
+			end
+			cuesTrack = track
+		end
+	end
+	if not cuesTrack or r.GetMediaTrackInfo_Value(cuesTrack, "I_FOLDERDEPTH") <= 0 then
+		return false, "Could not find a valid CUES folder while enforcing Preview and Full Mix order."
+	end
+
+	local paths = getTrackPathMap(project)
+	local preview = paths[H.normalizePath("CUES/Preview")]
+	local fullMix = paths[H.normalizePath("CUES/Full Mix")]
+	if preview == false or fullMix == false then
+		return false, "Duplicate Preview or Full Mix tracks make the required CUES track order ambiguous."
+	end
+	if not preview or not fullMix then
+		return false, "Could not find both Preview and Full Mix tracks inside the CUES folder."
+	end
+	if r.GetParentTrack(preview) ~= cuesTrack or r.GetParentTrack(fullMix) ~= cuesTrack then
+		return false, "Preview and Full Mix must be direct child tracks of the CUES folder."
+	end
+
+	local function findTrackIndex(target)
+		for index = 0, r.CountTracks(project) - 1 do
+			if r.GetTrack(project, index) == target then
+				return index
+			end
+		end
+		return nil
+	end
+
+	local function moveToIndex(track, targetIndex, trackName)
+		if findTrackIndex(track) ~= targetIndex then
+			r.SetOnlyTrackSelected(track)
+			r.ReorderSelectedTracks(targetIndex, 0)
+		end
+		if findTrackIndex(track) ~= targetIndex then
+			return false, "REAPER could not move " .. trackName .. " to its required CUES position."
+		end
+		return true
+	end
+
+	local cuesIndex = findTrackIndex(cuesTrack)
+	local previewMoved, previewError = moveToIndex(preview, cuesIndex + 1, "Preview")
+	if not previewMoved then
+		return false, previewError
+	end
+	if r.GetParentTrack(preview) ~= cuesTrack then
+		return false, "Moving Preview changed its folder; could not safely enforce CUES track order."
+	end
+
+	cuesIndex = findTrackIndex(cuesTrack)
+	local fullMixMoved, fullMixError = moveToIndex(fullMix, cuesIndex + 2, "Full Mix")
+	if not fullMixMoved then
+		return false, fullMixError
+	end
+	if r.GetParentTrack(fullMix) ~= cuesTrack then
+		return false, "Moving Full Mix changed its folder; could not safely enforce CUES track order."
+	end
+	return true
+end
+
 -------------------------------------------------------------------------------
 -- Fixed-lane assignment and region updates
 -------------------------------------------------------------------------------
@@ -208,6 +329,40 @@ local function ensureVersionLane(track, versionIndex)
 		r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", versionIndex)
 	end
 	r.UpdateTimeline()
+end
+
+---Sets all direct CUES child tracks to at least a common fixed-lane count.
+---@param project ReaProject
+---@param minimumLaneCount number
+---@return boolean success, string|nil error
+local function ensureSharedCueLaneCount(project, minimumLaneCount)
+	local cuesTrack
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		local _, name = r.GetTrackName(track)
+		if name == "CUES" and not r.GetParentTrack(track) then
+			if cuesTrack then
+				return false, "Multiple top-level CUES tracks exist; could not synchronize version lanes."
+			end
+			cuesTrack = track
+		end
+	end
+	if not cuesTrack or r.GetMediaTrackInfo_Value(cuesTrack, "I_FOLDERDEPTH") <= 0 then
+		return false, "Could not find a valid CUES folder while synchronizing version lanes."
+	end
+
+	local childTracks, sharedLaneCount = {}, minimumLaneCount
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		if r.GetParentTrack(track) == cuesTrack then
+			table.insert(childTracks, track)
+			sharedLaneCount = math.max(sharedLaneCount, r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+		end
+	end
+	for _, track in ipairs(childTracks) do
+		ensureVersionLane(track, sharedLaneCount)
+	end
+	return true
 end
 
 local function findCueRegion(regions, cueId)
@@ -334,13 +489,19 @@ local function main()
 	local files, warnings = {}, {}
 	enumerateAudio(root .. "/03_Cues/03-01_Exports", H.parsePremixFilename, "stem", report.prefix, files, warnings)
 	enumerateAudio(root .. "/04_Previews", H.parsePreviewFilename, "preview", report.prefix, files, warnings)
+	enumerateFullMixes(root .. "/05_Delivery", report.prefix, files, warnings)
 	if #files == 0 then
 		local suffix = #warnings > 0 and ("\n\n" .. table.concat(warnings, "\n")) or ""
-		r.ShowMessageBox("No matching audio preview or pre-mix stem renders were found." .. suffix, TITLE, MB_OK)
+		r.ShowMessageBox(
+		"No matching audio preview, pre-mix stem, or full mix renders were found." .. suffix,
+			TITLE,
+			MB_OK
+		)
 		return
 	end
 
 	local seenCandidates, uniqueFiles, maxVersionByCue = {}, {}, {}
+	local maxVersionIndex = 0
 	for _, file in ipairs(files) do
 		local duplicateKey = table.concat({ file.cueId, file.normalizedVersion, file.mediaKind, file.stem or "" }, "|")
 		duplicateKey = H.normalizePath(duplicateKey)
@@ -349,6 +510,7 @@ local function main()
 		else
 			seenCandidates[duplicateKey] = true
 			table.insert(uniqueFiles, file)
+			maxVersionIndex = math.max(maxVersionIndex, file.versionIndex)
 			local previous = maxVersionByCue[file.cueId]
 			if not previous or H.compareVersions(file.version, previous.version) > 0 then
 				maxVersionByCue[file.cueId] = file
@@ -448,9 +610,17 @@ local function main()
 			end
 			trackPaths = getTrackPathMap(project)
 		end
+		local lanesReady, laneError = ensureSharedCueLaneCount(project, maxVersionIndex)
+		if not lanesReady then
+			error(laneError)
+		end
 
 		for _, file in ipairs(toImport) do
-			local targetPath = H.normalizePath(file.mediaKind == "preview" and "CUES/Preview" or "CUES/" .. file.stem)
+			local targetPath = H.normalizePath(
+				file.mediaKind == "preview" and "CUES/Preview"
+					or file.mediaKind == "fullmix" and "CUES/Full Mix"
+					or "CUES/" .. file.stem
+			)
 			local target = trackPaths[targetPath]
 			if not target then
 				local reason = target == false and ("Multiple tracks have the name path " .. targetPath .. ".")
@@ -515,6 +685,12 @@ local function main()
 			end
 		end
 	end, debug.traceback)
+	local orderCallOk, orderOk, orderError = pcall(ensureCueTrackOrder, project)
+	if not orderCallOk then
+		table.insert(failures, "Could not enforce Preview and Full Mix track order: " .. tostring(orderOk))
+	elseif not orderOk then
+		table.insert(failures, orderError or "Could not enforce Preview and Full Mix track order.")
+	end
 	r.PreventUIRefresh(-1)
 	while r.CountSelectedTracks(project) > 0 do
 		r.SetTrackSelected(r.GetSelectedTrack(project, 0), false)
@@ -539,7 +715,7 @@ local function main()
 	local result = "Placed "
 		.. tostring(importCount)
 		.. " render file(s).\n\n"
-		.. "Source lanes were preserved. Native comp-lane automation is not yet applied by this initial implementation."
+		.. "Imported items remain on their version lanes. CUES child tracks share a lane count based on discovered renders. Native comp-lane automation is not yet applied by this initial implementation."
 	if #failures > 0 then
 		result = result .. "\n\nIssues:\n- " .. table.concat(failures, "\n- ")
 	end
