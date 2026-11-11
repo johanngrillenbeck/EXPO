@@ -10,6 +10,8 @@
 --   Keep Preview and Full Mix as the first two CUES child tracks on every placement run.
 --   Match all CUES child lane counts to the highest discovered render version.
 --   Group all CUES child tracks in Group 1 and enable media/razor edit lead and follow.
+--   Create comp areas from all available items of each cue's latest version.
+--   Reconcile existing items by named version lanes and label takes with source filenames.
 -- @noindex
 
 local r = reaper
@@ -17,6 +19,10 @@ local TITLE = "EXPO - Place cues"
 local MB_OK, MB_OKCANCEL, MB_RESULT_OK = 0, 1, 1
 local MAX_LANES_WITHOUT_CONFIRMATION = 30
 local MAX_SUPPORTED_LANES = 1000
+local ADD_COMP_AREAS_COMMAND_ID = 42652
+local TURN_OFF_COMPING_COMMAND_ID = 42692
+local OPEN_FIXED_ITEM_LANES_COMMAND_ID = 42431
+local TOGGLE_FIXED_ITEM_LANES_COMMAND_ID = 42430
 local VIDEO_LANE = "EXPO (Video Preview)"
 local FINAL_LANE = "EXPO (Final Audio)"
 
@@ -142,7 +148,12 @@ local function inspectProjectSources(project)
 					local position = r.GetMediaItemInfo_Value(item, "D_POSITION")
 					local length = r.GetMediaItemInfo_Value(item, "D_LENGTH")
 					sourceItems[key] = sourceItems[key] or {}
-					table.insert(sourceItems[key], { startPos = position, endPos = position + length })
+					table.insert(sourceItems[key], {
+						item = item,
+						track = track,
+						startPos = position,
+						endPos = position + length,
+					})
 				end
 			end
 		end
@@ -320,16 +331,49 @@ end
 -- Fixed-lane assignment and region updates
 -------------------------------------------------------------------------------
 
+local function getVersionLaneIndex(track, versionName)
+	local laneCount = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+	for laneIndex = 0, laneCount - 1 do
+		local _, laneName = r.GetSetMediaTrackInfo_String(track, "P_LANENAME:" .. laneIndex, "", false)
+		if laneName == versionName then
+			return laneIndex
+		end
+	end
+	return nil
+end
+
 local function ensureVersionLane(track, versionIndex)
+	local versionName = tostring(versionIndex)
 	local currentMode = r.GetMediaTrackInfo_Value(track, "I_FREEMODE")
 	if currentMode ~= 2 then
 		r.SetMediaTrackInfo_Value(track, "I_FREEMODE", 2)
+		r.UpdateTimeline()
 	end
-	local laneCount = r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0
-	if laneCount < versionIndex then
-		r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", versionIndex)
+	local laneIndex = getVersionLaneIndex(track, versionName)
+	if laneIndex ~= nil then
+		return laneIndex
 	end
+
+	local laneCount = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+	r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", laneCount + 1)
 	r.UpdateTimeline()
+	laneCount = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+	laneIndex = getVersionLaneIndex(track, versionName)
+	if laneIndex ~= nil then
+		return laneIndex
+	end
+	if laneCount <= 0 then
+		return nil, "REAPER could not create fixed lane " .. versionName .. "."
+	end
+
+	-- New lanes are appended; name them with the version token rather than relying on position.
+	laneIndex = laneCount - 1
+	local named = r.GetSetMediaTrackInfo_String(track, "P_LANENAME:" .. laneIndex, versionName, true)
+	r.UpdateTimeline()
+	if not named or getVersionLaneIndex(track, versionName) == nil then
+		return nil, "REAPER could not name the fixed lane " .. versionName .. "."
+	end
+	return getVersionLaneIndex(track, versionName)
 end
 
 ---Sets all direct CUES child tracks to at least a common fixed-lane count.
@@ -357,11 +401,23 @@ local function ensureSharedCueLaneCount(project, minimumLaneCount)
 		local track = r.GetTrack(project, index)
 		if r.GetParentTrack(track) == cuesTrack then
 			table.insert(childTracks, track)
-			sharedLaneCount = math.max(sharedLaneCount, r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+			local laneCount = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+			for laneIndex = 0, laneCount - 1 do
+				local _, laneName = r.GetSetMediaTrackInfo_String(track, "P_LANENAME:" .. laneIndex, "", false)
+				local namedVersion = tonumber(laneName)
+				if namedVersion and namedVersion >= 1 and namedVersion == math.floor(namedVersion) then
+					sharedLaneCount = math.max(sharedLaneCount, namedVersion)
+				end
+			end
 		end
 	end
 	for _, track in ipairs(childTracks) do
-		ensureVersionLane(track, sharedLaneCount)
+		for versionIndex = 1, sharedLaneCount do
+			local _, err = ensureVersionLane(track, versionIndex)
+			if err then
+				return false, err
+			end
+		end
 	end
 	return true
 end
@@ -467,11 +523,55 @@ local function setRegionLane(project, region, laneName, position, endPosition, n
 	return true
 end
 
+---Sets an existing item's track, filename-derived position, version lane, and take name.
+---@param item MediaItem
+---@param track MediaTrack
+---@param file table
+---@param laneIndex number
+---@return boolean success, number|nil length, string|nil error
+local function configureRenderItem(item, track, file, laneIndex)
+	if r.GetMediaItemTrack(item) ~= track then
+		r.MoveMediaItemToTrack(item, track)
+		if r.GetMediaItemTrack(item) ~= track then
+			return false, nil, "REAPER could not move " .. displayName(file.path) .. " to its target track."
+		end
+	end
+
+	local take = r.GetActiveTake(item)
+	local source = take and r.GetMediaItemTake_Source(take)
+	if not take or not source then
+		return false, nil, "Could not resolve the active take for " .. displayName(file.path)
+	end
+	local length = r.GetMediaSourceLength(source)
+	if not length or length <= 0 then
+		return false, nil, "REAPER reported an invalid source length for " .. displayName(file.path)
+	end
+
+	local takeNameSet = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", displayName(file.path), true)
+	if not takeNameSet then
+		return false, nil, "REAPER could not name the take after " .. displayName(file.path)
+	end
+	r.SetMediaItemInfo_Value(item, "D_POSITION", file.startPosition)
+	r.SetMediaItemInfo_Value(item, "D_LENGTH", length)
+	r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", laneIndex)
+	if r.GetMediaItemInfo_Value(item, "I_FIXEDLANE") ~= laneIndex then
+		return false,
+			nil,
+			"REAPER did not assign "
+				.. displayName(file.path)
+				.. " to version lane "
+				.. tostring(file.versionIndex)
+				.. "."
+	end
+	return true, length
+end
+
 ---Creates a media item on an explicit target track and attaches the rendered file as its source.
 ---@param track MediaTrack
 ---@param file table
+---@param laneIndex number
 ---@return MediaItem|nil item, number|nil length, string|nil error
-local function createRenderItem(track, file)
+local function createRenderItem(track, file, laneIndex)
 	local source = r.PCM_Source_CreateFromFile(file.path)
 	if not source then
 		return nil, nil, "REAPER could not open " .. displayName(file.path)
@@ -499,10 +599,97 @@ local function createRenderItem(track, file)
 		return nil, nil, "REAPER reported an invalid source length for " .. displayName(file.path)
 	end
 
+	local takeNameSet = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", displayName(file.path), true)
+	if not takeNameSet then
+		r.DeleteTrackMediaItem(track, item)
+		return nil, nil, "REAPER could not name the take after " .. displayName(file.path)
+	end
 	r.SetMediaItemInfo_Value(item, "D_POSITION", file.startPosition)
 	r.SetMediaItemInfo_Value(item, "D_LENGTH", length)
-	r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", file.versionIndex - 1)
+	r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", laneIndex)
+	if r.GetMediaItemInfo_Value(item, "I_FIXEDLANE") ~= laneIndex then
+		r.DeleteTrackMediaItem(track, item)
+		return nil,
+			nil,
+			"REAPER did not assign "
+				.. displayName(file.path)
+				.. " to version lane "
+				.. tostring(file.versionIndex)
+				.. "."
+	end
 	return item, length
+end
+
+---Adds comp areas from all available items of each cue's latest discovered version.
+---@param project ReaProject
+---@param files table[]
+---@param latestByCue table
+---@return boolean success, number|nil compCount, string|nil error
+local function applyLatestCueCompAreas(project, files, latestByCue)
+	local cuesTrack
+	for index = 0, r.CountTracks(project) - 1 do
+		local track = r.GetTrack(project, index)
+		local _, name = r.GetTrackName(track)
+		if name == "CUES" and not r.GetParentTrack(track) then
+			cuesTrack = track
+			break
+		end
+	end
+	if not cuesTrack then
+		return false, nil, "Could not find the CUES folder while creating comp areas."
+	end
+
+	local _, sourceItems = inspectProjectSources(project)
+	local candidatesByCue = {}
+	for _, file in ipairs(files) do
+		local latest = latestByCue[file.cueId]
+		if latest and file.normalizedVersion == latest.normalizedVersion then
+			local items = sourceItems[H.normalizePath(file.path)] or {}
+			for _, sourceItem in ipairs(items) do
+				if r.GetParentTrack(sourceItem.track) == cuesTrack then
+					local candidate = candidatesByCue[file.cueId]
+					if not candidate then
+						candidate = { cueId = file.cueId, items = {}, itemSet = {}, position = sourceItem.startPos }
+						candidatesByCue[file.cueId] = candidate
+					end
+					if not candidate.itemSet[sourceItem.item] then
+						candidate.itemSet[sourceItem.item] = true
+						table.insert(candidate.items, sourceItem.item)
+						candidate.position = math.min(candidate.position, sourceItem.startPos)
+					end
+				end
+			end
+		end
+	end
+	local candidates = {}
+	for _, candidate in pairs(candidatesByCue) do
+		table.insert(candidates, candidate)
+	end
+	table.sort(candidates, function(a, b)
+		if a.position == b.position then
+			return a.cueId < b.cueId
+		end
+		return a.position < b.position
+	end)
+	local ok, err = xpcall(function()
+		for _, candidate in ipairs(candidates) do
+			for index = 0, r.CountMediaItems(project) - 1 do
+				r.SetMediaItemSelected(r.GetMediaItem(project, index), false)
+			end
+			for _, item in ipairs(candidate.items) do
+				r.SetMediaItemSelected(item, true)
+			end
+			r.Main_OnCommandEx(ADD_COMP_AREAS_COMMAND_ID, 0, project)
+		end
+	end, debug.traceback)
+	local turnOffOk, turnOffError = pcall(r.Main_OnCommandEx, TURN_OFF_COMPING_COMMAND_ID, 0, project)
+	if not turnOffOk then
+		return false, nil, "Could not turn off comping after adding comp areas: " .. tostring(turnOffError)
+	end
+	if not ok then
+		return false, nil, tostring(err)
+	end
+	return true, #candidates
 end
 
 local function regionName(cueId, version, startPosition, endPosition)
@@ -621,24 +808,20 @@ local function main()
 	end
 
 	local _, sourceItems = inspectProjectSources(project)
-	local toImport = {}
 	local alreadyPlaced = {}
+	local sourceItemsByFile = {}
 	local versionSpans = {}
 	for _, file in ipairs(uniqueFiles) do
 		local sourceKey = H.normalizePath(file.path)
 		local existingItems = sourceItems[sourceKey]
+		sourceItemsByFile[sourceKey] = existingItems
 		if existingItems then
 			table.insert(alreadyPlaced, displayName(file.path))
-			for _, itemSpan in ipairs(existingItems) do
-				addSpan(versionSpans, file.cueId, file.normalizedVersion, itemSpan.startPos, itemSpan.endPos)
-			end
-		else
-			table.insert(toImport, file)
 		end
 	end
 	local trackPaths = getTrackPathMap(project)
 	local neededStems = {}
-	for _, file in ipairs(toImport) do
+	for _, file in ipairs(uniqueFiles) do
 		if file.mediaKind == "stem" then
 			neededStems[H.normalizePath(file.stem)] = file.stem
 		end
@@ -670,12 +853,20 @@ local function main()
 			end
 			trackPaths = getTrackPathMap(project)
 		end
+		local orderReady, orderError = ensureCueTrackOrder(project)
+		if not orderReady then
+			error(orderError)
+		end
+		local groupReady, groupError = ensureCueTrackGroup(project)
+		if not groupReady then
+			error(groupError)
+		end
 		local lanesReady, laneError = ensureSharedCueLaneCount(project, maxVersionIndex)
 		if not lanesReady then
 			error(laneError)
 		end
 
-		for _, file in ipairs(toImport) do
+		for _, file in ipairs(uniqueFiles) do
 			local targetPath = H.normalizePath(
 				file.mediaKind == "preview" and "CUES/Preview"
 					or file.mediaKind == "fullmix" and "CUES/Full Mix"
@@ -687,19 +878,46 @@ local function main()
 					or ("No target track at " .. targetPath .. ".")
 				table.insert(failures, reason .. " Could not place " .. displayName(file.path))
 			else
-				ensureVersionLane(target, file.versionIndex)
-				local inserted, length, importError = createRenderItem(target, file)
-				if not inserted then
-					table.insert(failures, importError or ("REAPER could not import " .. displayName(file.path)))
-				else
-					importCount = importCount + 1
-					addSpan(
-						versionSpans,
-						file.cueId,
-						file.normalizedVersion,
-						file.startPosition,
-						file.startPosition + (length or 0)
+				local laneIndex, laneError = ensureVersionLane(target, file.versionIndex)
+				if laneIndex == nil then
+					table.insert(
+						failures,
+						laneError or ("Could not resolve version lane for " .. displayName(file.path))
 					)
+				else
+					local existingItems = sourceItemsByFile[H.normalizePath(file.path)]
+					local length
+					if existingItems and #existingItems > 0 then
+						for _, existing in ipairs(existingItems) do
+							local repaired, itemLength, repairError =
+								configureRenderItem(existing.item, target, file, laneIndex)
+							if not repaired then
+								table.insert(failures, repairError)
+							else
+								length = itemLength
+							end
+						end
+					else
+						local inserted, itemLength, importError = createRenderItem(target, file, laneIndex)
+						if not inserted then
+							table.insert(
+								failures,
+								importError or ("REAPER could not import " .. displayName(file.path))
+							)
+						else
+							importCount = importCount + 1
+							length = itemLength
+						end
+					end
+					if length and length > 0 then
+						addSpan(
+							versionSpans,
+							file.cueId,
+							file.normalizedVersion,
+							file.startPosition,
+							file.startPosition + length
+						)
+					end
 				end
 			end
 		end
@@ -745,19 +963,32 @@ local function main()
 			end
 		end
 	end, debug.traceback)
-	local orderCallOk, orderOk, orderError = pcall(ensureCueTrackOrder, project)
-	if not orderCallOk then
-		table.insert(failures, "Could not enforce Preview and Full Mix track order: " .. tostring(orderOk))
-	elseif not orderOk then
-		table.insert(failures, orderError or "Could not enforce Preview and Full Mix track order.")
-	end
-	local groupCallOk, groupOk, groupError = pcall(ensureCueTrackGroup, project)
-	if not groupCallOk then
-		table.insert(failures, "Could not configure the CUES track group: " .. tostring(groupOk))
-	elseif not groupOk then
-		table.insert(failures, groupError or "Could not configure the CUES track group.")
+	local compCount = 0
+	if ok then
+		local compCallOk, compOk, compResult = pcall(applyLatestCueCompAreas, project, uniqueFiles, maxVersionByCue)
+		if not compCallOk then
+			table.insert(failures, "Could not create latest-version comp areas: " .. tostring(compOk))
+		elseif not compOk then
+			table.insert(failures, compResult or "Could not create latest-version comp areas.")
+		else
+			compCount = compResult or 0
+		end
 	end
 	r.PreventUIRefresh(-1)
+	while r.CountSelectedTracks(project) > 0 do
+		r.SetTrackSelected(r.GetSelectedTrack(project, 0), false)
+	end
+	for index = 0, r.CountTracks(project) - 1 do
+		r.SetTrackSelected(r.GetTrack(project, index), true)
+	end
+	local lanesOpenOk, lanesOpenError = pcall(r.Main_OnCommandEx, OPEN_FIXED_ITEM_LANES_COMMAND_ID, 0, project)
+	if not lanesOpenOk then
+		table.insert(failures, "Could not open fixed item lanes before closing them: " .. tostring(lanesOpenError))
+	end
+	local lanesCloseOk, lanesCloseError = pcall(r.Main_OnCommandEx, TOGGLE_FIXED_ITEM_LANES_COMMAND_ID, 0, project)
+	if not lanesCloseOk then
+		table.insert(failures, "Could not toggle fixed item lanes closed: " .. tostring(lanesCloseError))
+	end
 	while r.CountSelectedTracks(project) > 0 do
 		r.SetTrackSelected(r.GetSelectedTrack(project, 0), false)
 	end
@@ -778,10 +1009,14 @@ local function main()
 	if not ok then
 		table.insert(failures, tostring(err))
 	end
-	local result = "Placed "
+	local result = "Imported "
 		.. tostring(importCount)
-		.. " render file(s).\n\n"
-		.. "Imported items remain on their version lanes. CUES child tracks share a lane count based on discovered renders. Native comp-lane automation is not yet applied by this initial implementation."
+		.. " new render file(s) and reconciled "
+		.. tostring(#alreadyPlaced)
+		.. " already-present file(s).\n\n"
+		.. "Created latest-version comp areas for "
+		.. tostring(compCount)
+		.. " cue(s). Comping mode was turned off after setup."
 	if #alreadyPlaced > 0 then
 		table.sort(alreadyPlaced)
 		result = result .. "\n\nAlready placed: \n" .. table.concat(alreadyPlaced, "\n")
