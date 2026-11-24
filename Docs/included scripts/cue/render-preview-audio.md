@@ -16,7 +16,7 @@ parent: Cue Scripts
 | Depends on              | Ultraschall API, ReaImGui, SWS |
 
 **Script Logic:**
-- Applies [safety checks]({% link Docs/general%20info/render-safety-checks.md %})
+- Applies [safety checks]({% link general info/render-safety-checks.md %})
 - Parses region names on EXPO Ruler Lane:
     - If name matches cue ID **and** version number from the .rpp Cue Project filename, continues
     - Same goes for multiple regions: If their names match the project filename, prompt which ones to export.
